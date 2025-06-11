@@ -18,7 +18,7 @@
 ### 2.1 Slack App設定
 1. Slack Appの作成
    - Bot Token Scopesの設定
-   - Slash Commandsの設定
+   - Slash Commandsの設定・バッファ枠
    - Incoming Webhooksの有効化
 
 2. 必要な権限
