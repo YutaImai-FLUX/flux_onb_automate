@@ -28,20 +28,34 @@ function getNewHires() {
     var emailShort = row[3];     // D列: メールアドレス用略称
     var email = row[4];          // E列: メールアドレス
     
+    writeLog('DEBUG', '【デバッグ】行' + (i + 2) + ' 生データ: ' + JSON.stringify(row));
     writeLog('DEBUG', '行' + (i + 2) + ': 職位=' + rank + ', 経験=' + experience + ', 氏名=' + name + ', 略称=' + emailShort + ', メール=' + email);
     
-    // 職位、氏名、メールアドレスまたは略称が入力されている行を対象とする
-    if (rank && name && (email || emailShort)) {
-      // メールアドレスが空の場合は略称@flux-g.comを使用
-      var finalEmail = email || (emailShort + '@flux-g.com');
+    // A~E列（職位、経験有無、名前、略称、メールアドレス）が全て入力されている行のみを対象とする
+    if (rank && rank.trim() !== '' && 
+        experience && experience.trim() !== '' && 
+        name && name.trim() !== '' && 
+        emailShort && emailShort.trim() !== '' && 
+        email && email.trim() !== '') {
       
       newHires.push({
         rowNum: i + 2, // 実際の行番号
-        rank: rank,     // A列: 職位
-        experience: experience, // B列: 経験有無
-        name: name,     // C列: 名前
-        email: finalEmail, // E列またはD列+ドメイン
+        rank: rank.trim(),         // A列: 職位
+        experience: experience.trim(), // B列: 経験有無
+        name: name.trim(),         // C列: 名前
+        email: email.trim(),       // E列: メールアドレス
       });
+      
+      writeLog('INFO', '入社者追加: ' + name + ' (職位:' + rank + ', 経験:' + experience + ', メール:' + email + ')');
+    } else {
+      var missingFields = [];
+      if (!rank || rank.trim() === '') missingFields.push('職位');
+      if (!experience || experience.trim() === '') missingFields.push('経験有無');
+      if (!name || name.trim() === '') missingFields.push('名前');
+      if (!emailShort || emailShort.trim() === '') missingFields.push('略称');
+      if (!email || email.trim() === '') missingFields.push('メールアドレス');
+      
+      writeLog('DEBUG', '行' + (i + 2) + ': 必須項目未入力のためスキップ (未入力: ' + missingFields.join(', ') + ')');
     }
   }
   writeLog('DEBUG', '対象入社者数: ' + newHires.length);
@@ -59,14 +73,25 @@ function updateStatuses(processedHires) {
 
 /**
  * 実行ログを`実行シート`に記録する
+ * 注意：2行目はヘッダー行のため、3行目以降に記録する
+ * 列構成：A=実行者, B=入社日, C=処理結果, D=詳細メッセージ, E=実行日時
  * @param {Object} params - 実行パラメータ
  * @param {string} status - 処理結果 (成功/エラー)
  * @param {string} message - 詳細メッセージ
  */
 function logExecution(params, status, message) {
-    // E,F列（5,6列目）にログを記載
-    params.sheet.getRange(2, 5).setValue(status);   // E列2行目に状態
-    params.sheet.getRange(2, 6).setValue(message);  // F列2行目にメッセージ
+    // 3行目（データ行）に記録
+    // 2行目はヘッダー行のため使用しない
+    var logRow = 3; // データ行の開始位置
+    
+    writeLog('DEBUG', '実行ログ記録: 行=' + logRow + ', 状態=' + status);
+    
+    // 新しい列構成に合わせて記録
+    params.sheet.getRange(logRow, 1).setValue(params.user);       // A列: 実行者
+    params.sheet.getRange(logRow, 2).setValue(params.hireDate);   // B列: 入社日
+    params.sheet.getRange(logRow, 3).setValue(status);            // C列: 処理結果
+    params.sheet.getRange(logRow, 4).setValue(message);           // D列: 詳細メッセージ
+    params.sheet.getRange(logRow, 5).setValue(new Date());        // E列: 実行日時
 }
 
 /**
@@ -96,8 +121,8 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
     var mappingSheet = spreadsheet.insertSheet(sheetName);
     writeLog('INFO', '新しいシート作成: ' + sheetName);
     
-    // ヘッダー行を作成
-    var headers = ['研修名', '対象者', '参加者数', '会議室要否', '会議室名', '講師', '研修実施日時'];
+    // ヘッダー行を作成（講師列をB列の次に移動）
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'カレンダーID'];
     
     // ヘッダーを設定
     mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -112,10 +137,34 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
     
     // データ行を作成
     writeLog('DEBUG', '新フォーマットでデータ行を作成します');
+    writeLog('DEBUG', 'trainingGroups配列の長さ: ' + trainingGroups.length);
+    
     var dataRows = [];
     for (var i = 0; i < trainingGroups.length; i++) {
         var group = trainingGroups[i];
-        writeLog('DEBUG', '研修グループ処理中: ' + group.name);
+        
+        // グループオブジェクトの詳細ログ出力（デバッグ用）
+        writeLog('DEBUG', '研修グループ[' + i + ']の内容: ' + JSON.stringify(group));
+        
+        // group が null または undefined の場合をチェック
+        if (!group) {
+            writeLog('ERROR', '研修グループ[' + i + ']が null または undefined です。スキップします。');
+            continue;
+        }
+        
+        // group.name が存在しない場合をチェック
+        if (!group.name) {
+            writeLog('ERROR', '研修グループ[' + i + ']にnameプロパティがありません。スキップします。グループ内容: ' + JSON.stringify(group));
+            continue;
+        }
+        
+        writeLog('DEBUG', '研修グループ処理中: ' + group.name + ' (順番: ' + (i + 1) + '/' + trainingGroups.length + ')');
+        
+        // attendees が存在しない場合をチェック
+        if (!group.attendees || !Array.isArray(group.attendees)) {
+            writeLog('ERROR', '研修グループ[' + i + '](' + group.name + ')にattendeesプロパティがないか配列ではありません。スキップします。');
+            continue;
+        }
         
         // 参加者リスト作成（講師を除く）
         var participants = [];
@@ -130,66 +179,108 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
         // 参加者数（講師を除く）
         var participantCount = participants.length;
         
-        // 会議室名を取得（仮）
+        // 会議室名を取得（実際の会議室名を表示）
         var roomName = '';
-        if (group.needsRoom && participantCount > 0) {
+        var needsRoom = group.needsRoom || false;
+        if (needsRoom && participantCount > 0) {
             try {
-                roomName = findAvailableRoomName(group.attendees.length);
+                // 実際の会議室確保を試行
+                var lecturerCount = group.lecturerEmails ? group.lecturerEmails.length : 1;
+                var totalAttendeeCount = participantCount + lecturerCount;
+                roomName = findAvailableRoomName(totalAttendeeCount);
+                writeLog('DEBUG', '会議室確保: ' + roomName + ' (総参加者: ' + totalAttendeeCount + '名)');
             } catch (e) {
-                roomName = 'エラー: ' + e.message;
+                roomName = '会議室確保失敗';
+                writeLog('WARN', '会議室確保失敗: ' + e.message + ' (研修: ' + group.name + ')');
             }
+        } else {
+            roomName = needsRoom ? '参加者なし' : 'オンライン';
         }
         
         // 研修実施日時を計算
         var trainingDateTime = '';
-        if (periodStart && periodEnd) {
-            var eventDate = new Date(periodStart);
-            var sequence = group.sequence || 1;
-            
-            // 平日ベースで日付を計算
-            var businessDaysToAdd = sequence - 1;
-            var daysAdded = 0;
-            while (daysAdded < businessDaysToAdd) {
-                eventDate.setDate(eventDate.getDate() + 1);
-                if (eventDate.getDay() !== 0 && eventDate.getDay() !== 6) {
-                    daysAdded++;
+        var groupTime = group.time || '60分';
+        writeLog('DEBUG', 'G列日時計算開始: ' + group.name + ' (implementationDay: ' + (group.implementationDay || 'なし') + 
+                 ', sequence: ' + (group.sequence || 'なし') + ', periodStart: ' + 
+                 (periodStart ? Utilities.formatDate(periodStart, 'Asia/Tokyo', 'yyyy/MM/dd') : 'null') + 
+                 ', periodEnd: ' + (periodEnd ? Utilities.formatDate(periodEnd, 'Asia/Tokyo', 'yyyy/MM/dd') : 'null') + ')');
+        
+        try {
+            if (periodStart && periodEnd) {
+                var eventDate = new Date(periodStart);
+                // implementationDayが設定されていればそれを使用、なければsequenceを使用
+                var implementationDay = group.implementationDay || group.sequence || 1;
+                
+                // 平日ベースで日付を計算（1営業日目は入社日当日）
+                var businessDaysToAdd = implementationDay - 1;
+                var daysAdded = 0;
+                while (daysAdded < businessDaysToAdd) {
+                    eventDate.setDate(eventDate.getDate() + 1);
+                    if (eventDate.getDay() !== 0 && eventDate.getDay() !== 6) {
+                        daysAdded++;
+                    }
                 }
+                
+                // 期間内チェック
+                if (eventDate > periodEnd) {
+                    writeLog('WARN', '計算された日付が期間終了日を超過、期間終了日に調整: ' + group.name);
+                    eventDate = new Date(periodEnd);
+                }
+                
+                var timeMatch = groupTime.match(/(\d+)分/);
+                var durationMinutes = timeMatch ? parseInt(timeMatch[1]) : 60;
+                var endHour = 9 + Math.floor(durationMinutes / 60);
+                var endMinute = durationMinutes % 60;
+                
+                trainingDateTime = Utilities.formatDate(eventDate, 'Asia/Tokyo', 'MM/dd(E)') + 
+                                 ' 9:00-' + 
+                                 (endHour < 10 ? '0' : '') + endHour + ':' + 
+                                 (endMinute < 10 ? '0' : '') + endMinute + 
+                                 ' (' + groupTime + ')';
+                
+                writeLog('DEBUG', 'G列日時計算結果: ' + group.name + ' → ' + trainingDateTime + 
+                         ' (実施日: ' + implementationDay + '営業日目)');
+            } else {
+                trainingDateTime = '日程未定 (' + groupTime + ')';
+                writeLog('WARN', 'G列日時計算: 期間情報が不足のため日程未定に設定: ' + group.name);
             }
-            
-            // 期間内チェック
-            if (eventDate > periodEnd) {
-                eventDate = new Date(periodEnd);
-            }
-            
-            var timeMatch = group.time.match(/(\d+)分/);
-            var durationMinutes = timeMatch ? parseInt(timeMatch[1]) : 60;
-            var endTime = new Date(new Date(eventDate).getTime() + (durationMinutes * 60 * 1000));
-            endTime.setHours(9 + Math.floor(durationMinutes / 60), durationMinutes % 60);
-            
-            trainingDateTime = Utilities.formatDate(eventDate, 'Asia/Tokyo', 'MM/dd(E)') + 
-                             ' 9:00-' + 
-                             Utilities.formatDate(endTime, 'Asia/Tokyo', 'HH:mm') + 
-                             ' (' + group.time + ')';
-        } else {
-            trainingDateTime = '日程未定 (' + group.time + ')';
+        } catch (e) {
+            writeLog('ERROR', 'G列日時計算エラー: ' + e.message + ' (研修: ' + group.name + ')');
+            trainingDateTime = '日時計算エラー (' + groupTime + ')';
         }
         
         var row = [
-            group.name,           // 研修名
-            participantsList,     // 対象者
-            participantCount,     // 参加者数
-            group.needsRoom ? '必要' : '不要', // 会議室要否
-            roomName,             // 会議室名
-            group.lecturer || '', // 講師
-            trainingDateTime      // 研修実施日時
+            group.name,                        // A列: 研修名
+            participantsList,                  // B列: 対象者
+            // C列: 講師情報 - 複数講師対応（改行区切り）
+            (group.lecturerNames && group.lecturerNames.length > 0) ? 
+                group.lecturerNames.join('\n') : 
+                (group.lecturer || ''),
+            participantCount,                  // D列: 参加者数
+            needsRoom ? '必要' : '不要',        // E列: 会議室要否
+            roomName,                          // F列: 会議室名
+            trainingDateTime,                  // G列: 研修実施日時
+            ''                                 // H列: カレンダーID（初期作成時は空）
         ];
         
+        writeLog('DEBUG', '行データ作成完了: ' + group.name + ' (列数: ' + row.length + ')');
         dataRows.push(row);
     }
     
     // データを設定
+    writeLog('DEBUG', 'データ行数: ' + dataRows.length);
     if (dataRows.length > 0) {
-        mappingSheet.getRange(2, 1, dataRows.length, dataRows[0].length).setValues(dataRows);
+        writeLog('DEBUG', '最初のデータ行: ' + JSON.stringify(dataRows[0]));
+        writeLog('DEBUG', 'データ行の列数: ' + dataRows[0].length);
+        writeLog('DEBUG', 'ヘッダーの列数: ' + headers.length);
+        
+        try {
+            mappingSheet.getRange(2, 1, dataRows.length, dataRows[0].length).setValues(dataRows);
+            writeLog('INFO', 'データ書き込み成功: ' + dataRows.length + '行');
+        } catch (e) {
+            writeLog('ERROR', 'データ書き込みエラー: ' + e.message);
+            throw e;
+        }
         
         // データ部分のスタイル設定
         var dataRange = mappingSheet.getRange(2, 1, dataRows.length, headers.length);
@@ -201,21 +292,49 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
         participantsRange.setWrap(true);
         participantsRange.setVerticalAlignment('top');
         
-        // 参加者数列（C列）の中央揃え
-        var countRange = mappingSheet.getRange(2, 3, dataRows.length, 1);
+        // 講師列（C列）の改行設定 - 複数講師対応
+        var lecturerRange = mappingSheet.getRange(2, 3, dataRows.length, 1);
+        lecturerRange.setWrap(true);
+        lecturerRange.setVerticalAlignment('top');
+        
+        // 参加者数列（D列）の中央揃え
+        var countRange = mappingSheet.getRange(2, 4, dataRows.length, 1);
         countRange.setHorizontalAlignment('center');
         countRange.setVerticalAlignment('middle');
     }
     
-    // 列幅の自動調整
-    for (var i = 1; i <= headers.length; i++) {
-        mappingSheet.autoResizeColumn(i);
-    }
+    // 列幅の最適化設定（講師列をC列に移動後）
+    mappingSheet.setColumnWidth(1, 250);  // A列: 研修名 - 研修名称に適した幅
+    mappingSheet.setColumnWidth(2, 300);  // B列: 対象者 - 複数参加者名に対応
+    mappingSheet.setColumnWidth(3, 200);  // C列: 講師 - 複数講師名に対応
+    mappingSheet.setColumnWidth(4, 80);   // D列: 参加者数 - 数値用の狭い幅
+    mappingSheet.setColumnWidth(5, 100);  // E列: 会議室要否 - "必要/不要"用
+    mappingSheet.setColumnWidth(6, 150);  // F列: 会議室名 - 会議室名称用
+    mappingSheet.setColumnWidth(7, 180);  // G列: 研修実施日時 - 日時フォーマット用
+    mappingSheet.setColumnWidth(8, 100);  // H列: カレンダーID - システム用（最小限）
     
-    // 行の高さを調整
+    // 列の固定（研修名列を固定してスクロールしやすくする）
+    mappingSheet.setFrozenColumns(1);
+    
+    // 行の高さを調整（内容に応じて動的に設定）
     mappingSheet.setRowHeight(1, 60); // ヘッダー行
     for (var i = 2; i <= dataRows.length + 1; i++) {
-        mappingSheet.setRowHeight(i, 25); // データ行
+        var rowIndex = i - 2; // dataRows配列のインデックス
+        if (rowIndex < dataRows.length) {
+            var participantsList = dataRows[rowIndex][1] || ''; // B列: 対象者
+            var lecturerInfo = dataRows[rowIndex][2] || '';     // C列: 講師
+            
+            // 改行数をカウントして行の高さを決定
+            var participantLines = (participantsList.toString().match(/\n/g) || []).length + 1;
+            var lecturerLines = (lecturerInfo.toString().match(/\n/g) || []).length + 1;
+            var maxLines = Math.max(participantLines, lecturerLines, 1);
+            
+            // 行の高さを内容に応じて調整（最小30px、改行1つにつき+20px）
+            var rowHeight = Math.max(30, 25 + (maxLines - 1) * 20);
+            mappingSheet.setRowHeight(i, rowHeight);
+        } else {
+            mappingSheet.setRowHeight(i, 25); // デフォルトの高さ
+        }
     }
     
     // サマリー情報を追加
@@ -234,6 +353,324 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
     summaryRange.setFontWeight('bold');
     
     writeLog('INFO', 'マッピングシート作成完了: ' + trainingGroups.length + '件の研修, ' + allNewHires.length + '名の入社者');
+    
+    return mappingSheet;
+}
+
+/**
+ * スケジュール結果でマッピングシートを更新する
+ * @param {Array<Object>} scheduleResults - スケジュール結果の配列
+ * @param {Array<Object>} allNewHires - 全入社者の配列
+ * @param {Date} periodStart - 研修期間開始日
+ * @param {Date} periodEnd - 研修期間終了日
+ */
+function updateMappingSheetWithScheduleResults(scheduleResults, allNewHires, periodStart, periodEnd) {
+    writeLog('INFO', 'スケジュール結果でマッピングシート更新開始');
+    writeLog('DEBUG', 'スケジュール結果数: ' + (scheduleResults ? scheduleResults.length : 0));
+    
+    // スケジュール結果の詳細をログ出力（デバッグ用）
+    if (scheduleResults && scheduleResults.length > 0) {
+        for (var i = 0; i < Math.min(3, scheduleResults.length); i++) {
+            var result = scheduleResults[i];
+            writeLog('DEBUG', 'スケジュール結果[' + i + ']: ' + 
+                     'training.name=' + (result.training ? result.training.name : 'null') + 
+                     ', scheduled=' + result.scheduled + 
+                     ', calendarEventId=' + (result.calendarEventId || 'null') + 
+                     ', eventTime=' + (result.eventTime ? 'あり' : 'なし'));
+        }
+    }
+    
+    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.EXECUTION);
+    var existingSheets = spreadsheet.getSheets();
+    var mappingSheet = null;
+    
+    // 最新のマッピングシートを探す
+    for (var i = 0; i < existingSheets.length; i++) {
+        if (existingSheets[i].getName().indexOf('マッピング結果_') === 0) {
+            mappingSheet = existingSheets[i];
+            break;
+        }
+    }
+    
+    if (!mappingSheet) {
+        writeLog('WARN', 'マッピングシートが見つかりません。新規作成します。');
+        // スケジュール結果を使って新しいマッピングシートを作成
+        createMappingSheetWithScheduleResults(scheduleResults, allNewHires, periodStart, periodEnd);
+        return;
+    }
+    
+    writeLog('INFO', 'マッピングシート更新: ' + mappingSheet.getName());
+    
+    // スケジュール結果をトレーニング名でマップ化
+    var scheduleMap = {};
+    for (var i = 0; i < scheduleResults.length; i++) {
+        var result = scheduleResults[i];
+        var trainingName = result.training.name;
+        scheduleMap[trainingName] = result;
+    }
+    
+    // 既存のデータ行数を取得
+    var lastRow = mappingSheet.getLastRow();
+    if (lastRow <= 1) {
+        writeLog('WARN', 'マッピングシートにデータがありません');
+        return;
+    }
+    
+    // データ行を更新（2行目から）
+    for (var row = 2; row <= lastRow; row++) {
+        var trainingName = mappingSheet.getRange(row, 1).getValue(); // A列: 研修名
+        if (!trainingName || trainingName.toString().trim() === '') {
+            continue;
+        }
+        
+        var scheduleResult = scheduleMap[trainingName];
+        if (scheduleResult) {
+            // E列（会議室名）を更新
+            var roomName = scheduleResult.roomName || '';
+            if (roomName === '' && !scheduleResult.training.needsRoom) {
+                roomName = 'オンライン';
+            } else if (!scheduleResult.scheduled) {
+                roomName = scheduleResult.error || '確保失敗';
+            }
+            
+            mappingSheet.getRange(row, 5).setValue(roomName); // E列: 会議室名
+            
+            // G列（研修実施日時）を更新（実際のスケジュール時間があれば）
+            if (scheduleResult.eventTime && scheduleResult.eventTime.start) {
+                var actualDateTime = Utilities.formatDate(scheduleResult.eventTime.start, 'Asia/Tokyo', 'MM/dd(E) HH:mm') + 
+                                   '-' + Utilities.formatDate(scheduleResult.eventTime.end, 'Asia/Tokyo', 'HH:mm');
+                mappingSheet.getRange(row, 7).setValue(actualDateTime); // G列: 研修実施日時
+                writeLog('INFO', 'G列(研修実施日時)更新成功: ' + trainingName + ' → ' + actualDateTime);
+            } else {
+                writeLog('WARN', 'G列(研修実施日時)更新スキップ: ' + trainingName + ' (eventTime: ' + 
+                         (scheduleResult.eventTime ? 'あり' : 'なし') + ', scheduled: ' + scheduleResult.scheduled + ')');
+            }
+            
+            // H列（カレンダーID）を更新
+            if (scheduleResult.calendarEventId) {
+                // ヘッダー数を確認してカレンダーID列の位置を特定
+                var lastCol = mappingSheet.getLastColumn();
+                var headerRow = mappingSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+                var calendarIdCol = -1;
+                for (var col = 0; col < headerRow.length; col++) {
+                    if (headerRow[col] === 'カレンダーID') {
+                        calendarIdCol = col + 1; // 1ベースのインデックス
+                        break;
+                    }
+                }
+                
+                if (calendarIdCol > 0) {
+                    mappingSheet.getRange(row, calendarIdCol).setValue(scheduleResult.calendarEventId);
+                    writeLog('INFO', 'カレンダーID更新成功: ' + trainingName + ' → ' + scheduleResult.calendarEventId + ' (列: ' + calendarIdCol + ')');
+                } else {
+                    writeLog('ERROR', 'カレンダーID列が見つかりません: ' + trainingName + ' (ヘッダー: ' + headerRow.join(', ') + ')');
+                }
+            } else {
+                writeLog('WARN', 'カレンダーIDが空です: ' + trainingName + ' (scheduled: ' + scheduleResult.scheduled + ', error: ' + (scheduleResult.error || 'なし') + ')');
+            }
+            
+            writeLog('DEBUG', '更新完了: ' + trainingName + ' → 会議室: ' + roomName);
+        } else {
+            writeLog('DEBUG', 'スケジュール結果なし: ' + trainingName);
+        }
+    }
+    
+    writeLog('INFO', 'マッピングシート更新完了');
+}
+
+/**
+ * スケジュール結果を使って新しいマッピングシートを作成する
+ * @param {Array<Object>} scheduleResults - スケジュール結果の配列
+ * @param {Array<Object>} allNewHires - 全入社者の配列
+ * @param {Date} periodStart - 研修期間開始日
+ * @param {Date} periodEnd - 研修期間終了日
+ */
+function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, periodStart, periodEnd) {
+    writeLog('INFO', 'スケジュール結果でマッピングシート作成開始');
+    
+    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.EXECUTION);
+    var sheetName = 'マッピング結果_' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd_HH-mm');
+    
+    // 既存のマッピングシートがあれば削除
+    var existingSheets = spreadsheet.getSheets();
+    for (var i = 0; i < existingSheets.length; i++) {
+        if (existingSheets[i].getName().indexOf('マッピング結果_') === 0) {
+            spreadsheet.deleteSheet(existingSheets[i]);
+        }
+    }
+    
+    // 新しいシートを作成
+    var mappingSheet = spreadsheet.insertSheet(sheetName);
+    writeLog('INFO', '新しいシート作成: ' + sheetName);
+    
+    // ヘッダー行を作成（講師列をB列の次に移動）
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'スケジュール状況', 'カレンダーID'];
+    
+    // ヘッダーを設定
+    mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    
+    // ヘッダー行のスタイル設定
+    var headerRange = mappingSheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#4a90e2');
+    headerRange.setFontColor('white');
+    headerRange.setFontWeight('bold');
+    headerRange.setWrap(true);
+    headerRange.setVerticalAlignment('middle');
+    
+    // データ行を作成
+    var dataRows = [];
+    for (var i = 0; i < scheduleResults.length; i++) {
+        var result = scheduleResults[i];
+        var training = result.training;
+        
+        // 参加者リスト作成（講師を除く）
+        var participants = [];
+        for (var j = 0; j < allNewHires.length; j++) {
+            var hire = allNewHires[j];
+            if (training.attendees.indexOf(hire.email) !== -1) {
+                participants.push(hire.name + '(' + hire.rank + '/' + hire.experience + ')');
+            }
+        }
+        var participantsList = participants.join('\n');
+        var participantCount = participants.length;
+        
+        // 会議室名を設定
+        var roomName = result.roomName || '';
+        if (roomName === 'オンライン' || (!training.needsRoom && roomName === '')) {
+            roomName = 'オンライン';
+        } else if (!result.scheduled) {
+            roomName = result.error || '確保失敗';
+        }
+        
+        // 研修実施日時を設定
+        var trainingDateTime = '';
+        if (result.eventTime && result.eventTime.start) {
+            trainingDateTime = Utilities.formatDate(result.eventTime.start, 'Asia/Tokyo', 'MM/dd(E) HH:mm') + 
+                             '-' + Utilities.formatDate(result.eventTime.end, 'Asia/Tokyo', 'HH:mm');
+        } else {
+            trainingDateTime = '日程未定 (' + training.time + ')';
+        }
+        
+        // スケジュール状況
+        var scheduleStatus = result.scheduled ? '成功' : ('失敗: ' + (result.error || '不明なエラー'));
+        
+        var row = [
+            training.name,                          // A列: 研修名
+            participantsList,                       // B列: 対象者
+            // C列: 講師情報 - 複数講師対応（改行区切り）
+            (training.lecturerNames && training.lecturerNames.length > 0) ? 
+                training.lecturerNames.join('\n') : 
+                (training.lecturer || ''),
+            participantCount,                       // D列: 参加者数
+            training.needsRoom ? '必要' : '不要',    // E列: 会議室要否
+            roomName,                               // F列: 会議室名
+            trainingDateTime,                       // G列: 研修実施日時
+            scheduleStatus,                         // H列: スケジュール状況
+            result.calendarEventId || ''            // I列: カレンダーID
+        ];
+        
+        dataRows.push(row);
+        writeLog('DEBUG', '行データ作成: ' + training.name + ' → 会議室: ' + roomName + ', 状況: ' + scheduleStatus);
+    }
+    
+    // データを設定
+    if (dataRows.length > 0) {
+        mappingSheet.getRange(2, 1, dataRows.length, dataRows[0].length).setValues(dataRows);
+        
+        // データ部分のスタイル設定
+        var dataRange = mappingSheet.getRange(2, 1, dataRows.length, headers.length);
+        dataRange.setBorder(true, true, true, true, true, true);
+        dataRange.setVerticalAlignment('top');
+        
+        // 対象者列（B列）の改行設定
+        var participantsRange = mappingSheet.getRange(2, 2, dataRows.length, 1);
+        participantsRange.setWrap(true);
+        participantsRange.setVerticalAlignment('top');
+        
+        // 講師列（C列）の改行設定 - 複数講師対応
+        var lecturerRange = mappingSheet.getRange(2, 3, dataRows.length, 1);
+        lecturerRange.setWrap(true);
+        lecturerRange.setVerticalAlignment('top');
+        
+        // 参加者数列（D列）の中央揃え
+        var countRange = mappingSheet.getRange(2, 4, dataRows.length, 1);
+        countRange.setHorizontalAlignment('center');
+        countRange.setVerticalAlignment('middle');
+        
+        // スケジュール状況列（H列）のスタイル設定
+        var statusRange = mappingSheet.getRange(2, 8, dataRows.length, 1);
+        for (var i = 0; i < dataRows.length; i++) {
+            var status = dataRows[i][7]; // スケジュール状況
+            var cellRange = mappingSheet.getRange(i + 2, 8);
+            if (status.indexOf('成功') !== -1) {
+                cellRange.setBackground('#d4edda');
+                cellRange.setFontColor('#155724');
+            } else {
+                cellRange.setBackground('#f8d7da');
+                cellRange.setFontColor('#721c24');
+            }
+        }
+    }
+    
+    // 列幅の最適化設定（スケジュール結果版 - 9列構成、講師列をC列に移動後）
+    mappingSheet.setColumnWidth(1, 250);  // A列: 研修名 - 研修名称に適した幅
+    mappingSheet.setColumnWidth(2, 300);  // B列: 対象者 - 複数参加者名に対応
+    mappingSheet.setColumnWidth(3, 200);  // C列: 講師 - 複数講師名に対応
+    mappingSheet.setColumnWidth(4, 80);   // D列: 参加者数 - 数値用の狭い幅
+    mappingSheet.setColumnWidth(5, 100);  // E列: 会議室要否 - "必要/不要"用
+    mappingSheet.setColumnWidth(6, 150);  // F列: 会議室名 - 会議室名称用
+    mappingSheet.setColumnWidth(7, 180);  // G列: 研修実施日時 - 日時フォーマット用
+    mappingSheet.setColumnWidth(8, 120);  // H列: スケジュール状況 - 成功/失敗状況
+    mappingSheet.setColumnWidth(9, 100);  // I列: カレンダーID - システム用（最小限）
+    
+    // 列の固定（研修名列を固定してスクロールしやすくする）
+    mappingSheet.setFrozenColumns(1);
+    
+    // 行の高さを調整（内容に応じて動的に設定）
+    mappingSheet.setRowHeight(1, 60); // ヘッダー行
+    for (var i = 2; i <= dataRows.length + 1; i++) {
+        var rowIndex = i - 2; // dataRows配列のインデックス
+        if (rowIndex < dataRows.length) {
+            var participantsList = dataRows[rowIndex][1] || ''; // B列: 対象者
+            var lecturerInfo = dataRows[rowIndex][2] || '';     // C列: 講師
+            
+            // 改行数をカウントして行の高さを決定
+            var participantLines = (participantsList.toString().match(/\n/g) || []).length + 1;
+            var lecturerLines = (lecturerInfo.toString().match(/\n/g) || []).length + 1;
+            var maxLines = Math.max(participantLines, lecturerLines, 1);
+            
+            // 行の高さを内容に応じて調整（最小30px、改行1つにつき+20px）
+            var rowHeight = Math.max(30, 25 + (maxLines - 1) * 20);
+            mappingSheet.setRowHeight(i, rowHeight);
+        } else {
+            mappingSheet.setRowHeight(i, 25); // デフォルトの高さ
+        }
+    }
+    
+    // サマリー情報を追加
+    var summaryStartRow = dataRows.length + 3;
+    mappingSheet.getRange(summaryStartRow, 1).setValue('【サマリー】');
+    mappingSheet.getRange(summaryStartRow + 1, 1).setValue('総研修数:');
+    mappingSheet.getRange(summaryStartRow + 1, 2).setValue(scheduleResults.length);
+    mappingSheet.getRange(summaryStartRow + 2, 1).setValue('成功した研修数:');
+    
+    var successCount = 0;
+    for (var i = 0; i < scheduleResults.length; i++) {
+        if (scheduleResults[i].scheduled) successCount++;
+    }
+    mappingSheet.getRange(summaryStartRow + 2, 2).setValue(successCount);
+    
+    mappingSheet.getRange(summaryStartRow + 3, 1).setValue('総入社者数:');
+    mappingSheet.getRange(summaryStartRow + 3, 2).setValue(allNewHires.length);
+    mappingSheet.getRange(summaryStartRow + 4, 1).setValue('作成日時:');
+    mappingSheet.getRange(summaryStartRow + 4, 2).setValue(new Date());
+    
+    // サマリー部分のスタイル設定
+    var summaryRange = mappingSheet.getRange(summaryStartRow, 1, 5, 2);
+    summaryRange.setBackground('#f0f0f0');
+    summaryRange.setFontWeight('bold');
+    
+    writeLog('INFO', 'スケジュール結果マッピングシート作成完了: ' + scheduleResults.length + '件の研修, 成功: ' + successCount + '件');
     
     return mappingSheet;
 } 
