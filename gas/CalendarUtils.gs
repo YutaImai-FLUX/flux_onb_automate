@@ -767,7 +767,7 @@ function isAnyRoomAvailable(numberOfAttendees, startTime, endTime) {
  * 講師の空き時間を考慮して適切な時間枠を見つける（実施日・実施順を考慮）
  * @param {Object} trainingGroup - 研修グループ
  * @param {Date} hireDate - 入社日
- * @returns {Object|null} {time: {start, end}, reason: string}
+ * @returns {Object|null} {start: Date, end: Date} または null
  */
 function findAvailableTimeSlot(trainingGroup, hireDate) {
     var durationMinutes = 60; // デフォルト60分
@@ -787,7 +787,7 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
     if (!targetDate || targetDate.getDay() === 0 || targetDate.getDay() === 6) {
         var reason = '対象日(' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd') + ')が週末または無効です';
         writeLog('WARN', reason);
-        return { time: null, reason: reason };
+        return null;
     }
 
     // 基準開始時間を設定
@@ -808,22 +808,31 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
     var proposedStart = new Date(calculatedStartTime.getTime());
     var proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
 
-    // 営業時間チェック
-    var maxEndTime = (implementationDay === 1) ? 20 : 19;
+    // 営業時間チェック（すべての日で19時まで統一）
+    var maxEndTime = 19;
     if (proposedEnd.getHours() > maxEndTime || (proposedEnd.getHours() === maxEndTime && proposedEnd.getMinutes() > 0)) {
         var reason = '計算された終了時刻(' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ')が営業時間外です';
         writeLog('WARN', reason);
-        return { time: null, reason: reason };
+        return null;
     }
 
     // 空き状況チェック
     var availability = isProposedTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup);
     if (availability.available) {
         writeLog('INFO', '時間枠確保成功（実施順厳密）: ' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
-        return { time: { start: proposedStart, end: proposedEnd }, reason: '' };
+        return { start: proposedStart, end: proposedEnd };
     } else {
-        writeLog('WARN', '時間枠確保失敗（実施順厳密）: ' + trainingGroup.name + ' - ' + availability.reason);
-        return { time: null, reason: availability.reason };
+        writeLog('WARN', '計算時間枠利用不可（' + availability.reason + '）、フォールバック検索を開始: ' + trainingGroup.name);
+        
+        // フォールバック: 15分間隔で次の空き時間を検索
+        var fallbackResult = findFallbackTimeSlot(targetDate, implementationDay, sequence, durationMinutes, proposedStart, trainingGroup);
+        if (fallbackResult) {
+            writeLog('INFO', 'フォールバック時間枠確保成功: ' + Utilities.formatDate(fallbackResult.start, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + Utilities.formatDate(fallbackResult.end, 'Asia/Tokyo', 'HH:mm'));
+            return fallbackResult;
+        } else {
+            writeLog('WARN', '時間枠確保失敗（フォールバック含む）: ' + trainingGroup.name);
+            return null;
+        }
     }
 }
 
@@ -919,6 +928,90 @@ function calculateSequenceBasedStartTime(targetDate, implementationDay, sequence
                  Utilities.formatDate(startTime, 'Asia/Tokyo', 'HH:mm'));
         return startTime;
     }
+}
+
+/**
+ * フォールバック時間枠検索（15分間隔で次の空き時間を検索）
+ * @param {Date} targetDate - 対象日
+ * @param {number} implementationDay - 実施日
+ * @param {number} sequence - 実施順
+ * @param {number} durationMinutes - 研修時間（分）
+ * @param {Date} originalStart - 元の開始時間
+ * @param {Object} trainingGroup - 研修グループ
+ * @returns {Object} {time: {start, end}|null, reason: string}
+ */
+function findFallbackTimeSlot(targetDate, implementationDay, sequence, durationMinutes, originalStart, trainingGroup) {
+    writeLog('INFO', 'フォールバック時間枠検索開始: ' + trainingGroup.name + ' (元時間: ' + 
+             Utilities.formatDate(originalStart, 'Asia/Tokyo', 'MM/dd HH:mm') + ')');
+    
+    // 検索範囲の設定（すべての日で19時まで統一）
+    var searchStart = new Date(originalStart.getTime());
+    var maxEndTime = 19; // すべての日で19時まで統一
+    var dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), maxEndTime, 0);
+    
+    // 昼休み時間帯の設定
+    var lunchStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 12, 0);
+    var lunchEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 13, 0);
+    
+    // 15分間隔で検索
+    var currentStart = new Date(searchStart.getTime());
+    var maxIterations = 50; // 無限ループ防止
+    var iteration = 0;
+    
+    writeLog('DEBUG', 'フォールバック検索範囲: ' + 
+             Utilities.formatDate(searchStart, 'Asia/Tokyo', 'MM/dd HH:mm') + ' - ' + 
+             Utilities.formatDate(dayEnd, 'Asia/Tokyo', 'MM/dd HH:mm'));
+    
+    while (iteration < maxIterations) {
+        iteration++;
+        
+        // 15分進める
+        currentStart.setTime(currentStart.getTime() + (15 * 60 * 1000));
+        var currentEnd = new Date(currentStart.getTime() + (durationMinutes * 60 * 1000));
+        
+        writeLog('DEBUG', 'フォールバック試行' + iteration + ': ' + 
+                 Utilities.formatDate(currentStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                 Utilities.formatDate(currentEnd, 'Asia/Tokyo', 'HH:mm'));
+        
+        // 営業時間外チェック
+        if (currentEnd > dayEnd) {
+            writeLog('DEBUG', 'フォールバック検索終了: 営業時間外に到達');
+            break;
+        }
+        
+        // 昼休み時間帯をスキップ
+        if (isLunchTimeOverlap(currentStart, currentEnd)) {
+            writeLog('DEBUG', 'フォールバック昼休みスキップ: ' + 
+                     Utilities.formatDate(currentStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                     Utilities.formatDate(currentEnd, 'Asia/Tokyo', 'HH:mm'));
+            
+            // 昼休み後に調整
+            if (currentStart < lunchEnd) {
+                currentStart = new Date(lunchEnd.getTime());
+                currentEnd = new Date(currentStart.getTime() + (durationMinutes * 60 * 1000));
+                writeLog('DEBUG', 'フォールバック昼休み後調整: ' + 
+                         Utilities.formatDate(currentStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                         Utilities.formatDate(currentEnd, 'Asia/Tokyo', 'HH:mm'));
+            }
+            continue;
+        }
+        
+        // 空き状況チェック
+        var availability = isProposedTimeSlotAvailable(currentStart, currentEnd, trainingGroup);
+        if (availability.available) {
+            writeLog('INFO', 'フォールバック時間枠発見: ' + 
+                     Utilities.formatDate(currentStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                     Utilities.formatDate(currentEnd, 'Asia/Tokyo', 'HH:mm') + ' (試行回数: ' + iteration + ')');
+            return { start: currentStart, end: currentEnd };
+        } else {
+            writeLog('DEBUG', 'フォールバック時間枠利用不可: ' + availability.reason);
+        }
+    }
+    
+    // フォールバック検索でも見つからなかった場合
+    var reason = 'フォールバック検索失敗: ' + iteration + '回試行後、利用可能な時間枠が見つかりませんでした';
+    writeLog('WARN', reason + ' (研修: ' + trainingGroup.name + ')');
+    return null;
 }
 
 /**
@@ -1340,19 +1433,18 @@ function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDat
             }
             
             // 時間枠を確保
-            var eventTimeResult = findAvailableTimeSlot(group, hireDate);
-            if (!eventTimeResult.time) {
-                writeLog('ERROR', '時間枠確保失敗: ' + group.name + ' - ' + eventTimeResult.reason);
+            var eventTime = findAvailableTimeSlot(group, hireDate);
+            if (!eventTime) {
+                writeLog('ERROR', '時間枠確保失敗: ' + group.name);
                 updateMappingSheetRow(mappingSheet, rowIndex, {
                     status: '失敗（時間枠未確保）',
                     roomName: group.needsRoom ? '会議室未確保' : 'オンライン',
                     schedule: '時間枠未確保',
-                    errorReason: eventTimeResult.reason
+                    errorReason: '利用可能な時間枠が見つかりませんでした'
                 });
                 errorCount++;
                 continue;
             }
-            var eventTime = eventTimeResult.time;
             
             // 会議室確保
             var roomName = null;
