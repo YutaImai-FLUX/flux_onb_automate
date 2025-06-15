@@ -535,24 +535,34 @@ var RoomReservationManager = (function() {
  */
 function createAllCalendarEvents(trainingGroups, hireDate) {
     writeLog('INFO', '全研修のカレンダーイベント作成開始');
-    
+
     // スケジュール管理用配列をリセット
     scheduledEvents = [];
-    
+
     // 会議室予約管理システムをリセット
     var roomManager = RoomReservationManager.getInstance();
     roomManager.reset();
-    
-    // 研修グループは既にLogic.gsでソート済みなので、順序をそのまま使用
-    var sortedGroups = trainingGroups.slice();
-    
+
+    // 研修グループを実施日、実施順で明示的にソートする
+    trainingGroups.sort(function(a, b) {
+        var dayA = a.implementationDay || 999;
+        var dayB = b.implementationDay || 999;
+        if (dayA !== dayB) {
+            return dayA - dayB;
+        }
+        var seqA = a.sequence || 999;
+        var seqB = b.sequence || 999;
+        return seqA - seqB;
+    });
+    writeLog('INFO', '研修グループを実施日・実施順でソートしました。');
+
     var scheduleResults = [];
-    
-    for (var i = 0; i < sortedGroups.length; i++) {
-        var group = sortedGroups[i];
-        
+
+    for (var i = 0; i < trainingGroups.length; i++) {
+        var group = trainingGroups[i];
+
         writeLog('INFO', '研修処理開始: ' + group.name + ' (ユニークキー: ' + (group.uniqueKey || 'なし') + ')');
-        
+
         // 改善されたユニークキーによる重複チェック
         var eventUniqueKey = generateEventUniqueKey(group);
         var isDuplicate = false;
@@ -757,7 +767,7 @@ function isAnyRoomAvailable(numberOfAttendees, startTime, endTime) {
  * 講師の空き時間を考慮して適切な時間枠を見つける（実施日・実施順を考慮）
  * @param {Object} trainingGroup - 研修グループ
  * @param {Date} hireDate - 入社日
- * @returns {Object|null} {start: Date, end: Date} または null
+ * @returns {Object|null} {time: {start, end}, reason: string}
  */
 function findAvailableTimeSlot(trainingGroup, hireDate) {
     var durationMinutes = 60; // デフォルト60分
@@ -767,126 +777,148 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
             durationMinutes = parseInt(timeMatch[1]);
         }
     }
-    
     var implementationDay = trainingGroup.implementationDay || 50;
     var sequence = trainingGroup.sequence || 100;
-    
-    writeLog('DEBUG', '時間枠検索開始: ' + trainingGroup.name + ' (時間: ' + durationMinutes + '分, 実施日: ' + implementationDay + '営業日目, 実施順: ' + sequence + ')');
-    
-    // 実施日が指定されている場合は、入社日を基準にその日を計算
-    var targetDate = null;
-    if (implementationDay && implementationDay !== 50 && implementationDay !== 999) {
-        targetDate = calculateImplementationDate(hireDate, implementationDay);
-        writeLog('DEBUG', '指定実施日: ' + implementationDay + '営業日目 = ' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd(E)'));
+
+    writeLog('INFO', '時間枠検索開始（実施順厳密版）: ' + trainingGroup.name + ' (実施日: ' + implementationDay + ', 実施順: ' + sequence + ', 時間: ' + durationMinutes + '分)');
+
+    // 実施日を計算
+    var targetDate = calculateImplementationDate(hireDate, implementationDay);
+    if (!targetDate || targetDate.getDay() === 0 || targetDate.getDay() === 6) {
+        var reason = '対象日(' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd') + ')が週末または無効です';
+        writeLog('WARN', reason);
+        return { time: null, reason: reason };
+    }
+
+    // 基準開始時間を設定
+    var baseHour, baseMinute;
+    if (implementationDay === 1) {
+        baseHour = 15; baseMinute = 0;
+    } else if (implementationDay === 2) {
+        baseHour = 16; baseMinute = 0;
     } else {
-        // 実施日が指定されていない場合は入社日当日から検索
-        targetDate = new Date(hireDate);
-        writeLog('DEBUG', '実施日未指定のため、入社日から検索: ' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd(E)'));
+        baseHour = 9; baseMinute = 0;
     }
+
+    // 実施順に基づく厳密な開始時間計算
+    var calculatedStartTime = calculateSequenceBasedStartTime(targetDate, implementationDay, sequence, durationMinutes, baseHour, baseMinute);
     
-    // **新機能**: 実施日 + 実施順に基づく優先時間枠の計算
-    var preferredTimeSlot = calculatePreferredTimeSlot(targetDate, implementationDay, sequence, durationMinutes);
-    if (preferredTimeSlot) {
-        writeLog('INFO', '優先時間枠計算: ' + trainingGroup.name + ' → ' + 
-                 Utilities.formatDate(preferredTimeSlot.start, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
-                 Utilities.formatDate(preferredTimeSlot.end, 'Asia/Tokyo', 'HH:mm'));
-        
-        // 優先時間枠が利用可能かチェック
-        if (isProposedTimeSlotAvailable(preferredTimeSlot.start, preferredTimeSlot.end, trainingGroup)) {
-            writeLog('INFO', '優先時間枠確保成功: ' + trainingGroup.name);
-            return preferredTimeSlot;
-        } else {
-            writeLog('WARN', '優先時間枠が利用不可、代替時間枠を検索: ' + trainingGroup.name);
-        }
+    writeLog('DEBUG', '実施順' + sequence + 'の計算開始時間: ' + Utilities.formatDate(calculatedStartTime, 'Asia/Tokyo', 'MM/dd HH:mm'));
+
+    var proposedStart = new Date(calculatedStartTime.getTime());
+    var proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
+
+    // 営業時間チェック
+    var maxEndTime = (implementationDay === 1) ? 20 : 19;
+    if (proposedEnd.getHours() > maxEndTime || (proposedEnd.getHours() === maxEndTime && proposedEnd.getMinutes() > 0)) {
+        var reason = '計算された終了時刻(' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ')が営業時間外です';
+        writeLog('WARN', reason);
+        return { time: null, reason: reason };
     }
-    
-    // 優先時間枠が使えない場合は従来ロジックで代替時間枠を検索
-    return findAlternativeTimeSlot(trainingGroup, hireDate, durationMinutes, targetDate);
+
+    // 空き状況チェック
+    var availability = isProposedTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup);
+    if (availability.available) {
+        writeLog('INFO', '時間枠確保成功（実施順厳密）: ' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
+        return { time: { start: proposedStart, end: proposedEnd }, reason: '' };
+    } else {
+        writeLog('WARN', '時間枠確保失敗（実施順厳密）: ' + trainingGroup.name + ' - ' + availability.reason);
+        return { time: null, reason: availability.reason };
+    }
 }
 
 /**
- * 実施日と実施順に基づいて優先時間枠を計算する
+ * 実施順に基づく厳密な開始時間を計算する
  * @param {Date} targetDate - 対象日
  * @param {number} implementationDay - 実施日
  * @param {number} sequence - 実施順
  * @param {number} durationMinutes - 研修時間（分）
- * @returns {Object|null} {start: Date, end: Date} または null
+ * @param {number} baseHour - 基準開始時間（時）
+ * @param {number} baseMinute - 基準開始時間（分）
+ * @returns {Date} 計算された開始時間
  */
-function calculatePreferredTimeSlot(targetDate, implementationDay, sequence, durationMinutes) {
-    writeLog('DEBUG', '優先時間枠計算開始: 実施日=' + implementationDay + ', 実施順=' + sequence + ', 時間=' + durationMinutes + '分');
+function calculateSequenceBasedStartTime(targetDate, implementationDay, sequence, durationMinutes, baseHour, baseMinute) {
+    var baseStartTime = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), baseHour, baseMinute);
     
-    // 平日でない場合はnullを返す
-    if (targetDate.getDay() === 0 || targetDate.getDay() === 6) {
-        writeLog('DEBUG', '土日のため優先時間枠計算をスキップ');
-        return null;
+    // 実施順1番の場合は基準時間から開始
+    if (sequence === 1) {
+        writeLog('DEBUG', '実施順1番のため基準時間から開始: ' + Utilities.formatDate(baseStartTime, 'Asia/Tokyo', 'HH:mm'));
+        return baseStartTime;
     }
-    
-    var baseHour, baseMinute;
-    
-    // 実施日に基づく基準時間の設定
-    if (implementationDay === 1) {
-        // 1営業日目は15:00から開始
-        baseHour = 15;
-        baseMinute = 0;
-    } else if (implementationDay === 2) {
-        // 2営業日目は16:00から開始
-        baseHour = 16;
-        baseMinute = 0;
+
+    // 同一日同一実施日の既存研修を実施順でソート
+    var sameDayEvents = scheduledEvents.filter(function(event) {
+        var eventDateStr = Utilities.formatDate(event.startTime, 'Asia/Tokyo', 'yyyy-MM-dd');
+        var targetDateStr = Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy-MM-dd');
+        return eventDateStr === targetDateStr && event.implementationDay === implementationDay;
+    });
+
+    if (sameDayEvents.length === 0) {
+        writeLog('DEBUG', '同一日に既存研修なし、基準時間から開始: ' + Utilities.formatDate(baseStartTime, 'Asia/Tokyo', 'HH:mm'));
+        return baseStartTime;
+    }
+
+    // 実施順でソート
+    sameDayEvents.sort(function(a, b) {
+        var aSeq = a.sequence || 999;
+        var bSeq = b.sequence || 999;
+        return aSeq - bSeq;
+    });
+
+    writeLog('DEBUG', '同一日既存研修(' + sameDayEvents.length + '件):');
+    for (var i = 0; i < sameDayEvents.length; i++) {
+        var event = sameDayEvents[i];
+        writeLog('DEBUG', '  実施順' + (event.sequence || '未設定') + ': ' + event.name + ' (' + 
+                 Utilities.formatDate(event.startTime, 'Asia/Tokyo', 'HH:mm') + '-' + 
+                 Utilities.formatDate(event.endTime, 'Asia/Tokyo', 'HH:mm') + ')');
+    }
+
+    // 現在の実施順の直前の研修を探す
+    var previousEvent = null;
+    for (var i = 0; i < sameDayEvents.length; i++) {
+        var event = sameDayEvents[i];
+        var eventSequence = event.sequence || 999;
+        
+        if (eventSequence === sequence - 1) {
+            previousEvent = event;
+            break;
+        }
+    }
+
+    if (previousEvent) {
+        // 直前の研修の終了時刻から即座に開始
+        var startTime = new Date(previousEvent.endTime.getTime());
+        
+        // 昼休み時間帯（12:00-13:00）を跨ぐ場合の調整
+        var lunchStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 12, 0);
+        var lunchEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 13, 0);
+        
+        if (startTime >= lunchStart && startTime < lunchEnd) {
+            startTime = lunchEnd;
+            writeLog('DEBUG', '実施順' + sequence + ': 直前研修終了が昼休み中のため13:00から開始');
+        }
+        
+        writeLog('DEBUG', '実施順' + sequence + ': 直前研修（実施順' + (sequence - 1) + '）終了時刻から開始: ' + 
+                 Utilities.formatDate(startTime, 'Asia/Tokyo', 'HH:mm'));
+        return startTime;
     } else {
-        // その他の実施日は9:00から開始
-        baseHour = 9;
-        baseMinute = 0;
-    }
-    
-    // 実施順に基づく時間オフセットの計算
-    var timeOffsetMinutes = 0;
-    if (sequence && sequence !== 100 && sequence !== 999) {
-        // 実施順1は基準時間、実施順2以降は60分間隔で後ろにずらす
-        // 研修時間が60分未満でも、次の研修との間に余裕を持たせるため
-        var intervalMinutes = Math.max(60, durationMinutes); // 最低60分間隔
-        timeOffsetMinutes = (sequence - 1) * intervalMinutes;
-        writeLog('DEBUG', '実施順オフセット計算: 実施順' + sequence + ' → +' + timeOffsetMinutes + '分 (間隔: ' + intervalMinutes + '分)');
-    }
-    
-    // 開始時間の計算
-    var proposedStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), baseHour, baseMinute);
-    proposedStart.setMinutes(proposedStart.getMinutes() + timeOffsetMinutes);
-    
-    // 終了時間の計算
-    var proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
-    
-    // 昼休み時間帯（12:00-13:00）との重複チェック
-    if (isLunchTimeOverlap(proposedStart, proposedEnd)) {
-        writeLog('DEBUG', '昼休み時間帯と重複、13:00以降に調整');
-        // 昼休み後（13:00）を新しい基準時間として設定
-        var lunchAdjustedStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 13, 0);
-        lunchAdjustedStart.setMinutes(lunchAdjustedStart.getMinutes() + timeOffsetMinutes);
+        // 直前の実施順がない場合、最も遅い終了時刻の研修の後から開始
+        var latestEvent = sameDayEvents[sameDayEvents.length - 1];
+        var startTime = new Date(latestEvent.endTime.getTime());
         
-        // 調整後の時間が元の時間より後になることを確認
-        proposedStart = lunchAdjustedStart > proposedStart ? lunchAdjustedStart : proposedStart;
-        proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
+        // 昼休み時間帯調整
+        var lunchStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 12, 0);
+        var lunchEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 13, 0);
         
-        writeLog('DEBUG', '昼休み調整後: ' + 
-                 Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'HH:mm') + '-' + 
-                 Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
+        if (startTime >= lunchStart && startTime < lunchEnd) {
+            startTime = lunchEnd;
+            writeLog('DEBUG', '実施順' + sequence + ': 最新研修終了が昼休み中のため13:00から開始');
+        }
+        
+        writeLog('DEBUG', '実施順' + sequence + ': 最新研修終了時刻から開始: ' + 
+                 Utilities.formatDate(startTime, 'Asia/Tokyo', 'HH:mm'));
+        return startTime;
     }
-    
-    // 営業時間内チェック
-    var maxEndTime = (implementationDay === 1) ? 20 : 19; // 1日目は20:00まで、その他は19:00まで
-    if (proposedEnd.getHours() > maxEndTime || (proposedEnd.getHours() === maxEndTime && proposedEnd.getMinutes() > 0)) {
-        writeLog('WARN', '営業時間外のため優先時間枠を計算できません: ' + 
-                 Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ' > ' + maxEndTime + ':00');
-        return null;
-    }
-    
-    writeLog('DEBUG', '優先時間枠計算完了: ' + 
-             Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
-             Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
-    
-    return {
-        start: proposedStart,
-        end: proposedEnd
-    };
 }
 
 /**
@@ -902,111 +934,25 @@ function isProposedTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup) 
              Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ')');
     
     // 1. 参加者の時間重複チェック
-    if (!isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup)) {
+    var timeSlotCheck = isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup);
+    if (!timeSlotCheck.available) {
         writeLog('DEBUG', '参加者の時間重複により利用不可');
-        return false;
+        return timeSlotCheck;
     }
     
     // 2. 会議室の要否をチェック
     if (trainingGroup.needsRoom) {
-        if (!isAnyRoomAvailable(trainingGroup.attendees.length, proposedStart, proposedEnd)) {
+        var totalAttendees = (trainingGroup.attendees ? trainingGroup.attendees.length : 0) + 
+                             (trainingGroup.lecturerEmails ? trainingGroup.lecturerEmails.length : (trainingGroup.lecturer ? 1 : 0));
+        
+        if (!isAnyRoomAvailable(totalAttendees, proposedStart, proposedEnd)) {
             writeLog('DEBUG', '利用可能な会議室がないため利用不可');
-            return false;
+            return { available: false, reason: '利用可能な会議室なし' };
         }
     }
     
     writeLog('DEBUG', '提案時間枠利用可能');
-    return true;
-}
-
-/**
- * 代替時間枠を検索する（従来ロジック）
- * @param {Object} trainingGroup - 研修グループ
- * @param {Date} hireDate - 入社日
- * @param {number} durationMinutes - 研修時間（分）
- * @param {Date} targetDate - 対象日
- * @returns {Object|null} {start: Date, end: Date} または null
- */
-function findAlternativeTimeSlot(trainingGroup, hireDate, durationMinutes, targetDate) {
-    writeLog('DEBUG', '代替時間枠検索開始: ' + trainingGroup.name);
-    
-    // 指定日またはその近辺で時間枠を検索（最大30日先まで）
-    var searchStartDate = new Date(targetDate);
-    var searchEndDate = new Date(targetDate);
-    searchEndDate.setDate(searchEndDate.getDate() + 30); // 30日先まで検索
-    
-    var currentDate = new Date(searchStartDate);
-    
-    while (currentDate <= searchEndDate) {
-        // 平日のみ処理
-        if (currentDate.getDay() !== 0 && currentDate.getDay() !== 6) {
-            
-            // 実施日に基づいて開始時間を決定
-            var startHour = 9; // デフォルトは9時
-            if (trainingGroup.implementationDay === 1) {
-                startHour = 15; // 1営業日目は15時以降
-                writeLog('DEBUG', '実施日1日目のため、検索開始時間を15時に設定');
-            } else if (trainingGroup.implementationDay === 2) {
-                startHour = 16; // 2営業日目は16時以降
-                writeLog('DEBUG', '実施日2日目のため、検索開始時間を16時に設定');
-            }
-            
-            // 1日の時間枠をチェック（30分刻み）
-            // 1日目のみ19時まで、それ以外は18時まで
-            var maxHour = (trainingGroup.implementationDay === 1) ? 19 : 18;
-            var maxEndTime = (trainingGroup.implementationDay === 1) ? 20 : 19;
-            
-            for (var hour = startHour; hour <= maxHour; hour++) {
-                // 00分と30分の両方をチェック
-                var minutes = [0, 30];
-                for (var m = 0; m < minutes.length; m++) {
-                    var minute = minutes[m];
-                    var proposedStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), hour, minute);
-                    var proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
-                    
-                    // 1日目は20:00、それ以外は19:00を超える場合はスキップ
-                    if (proposedEnd.getHours() > maxEndTime || (proposedEnd.getHours() === maxEndTime && proposedEnd.getMinutes() > 0)) {
-                        continue; // breakではなくcontinueで次の時間枠をチェック
-                    }
-                    
-                    // 昼休み時間帯（12:00-13:00）との重複チェック
-                    if (isLunchTimeOverlap(proposedStart, proposedEnd)) {
-                        writeLog('DEBUG', '昼休み時間帯（12:00-13:00）と重複するためスキップ: ' + 
-                                 Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'HH:mm') + '-' + 
-                                 Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
-                        continue; // 昼休み時間帯と重複するためスキップ
-                    }
-                    
-                    // 時間重複チェック（参加者）
-                    if (isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup)) {
-                        // 参加者が利用可能な場合、会議室の要否をチェック
-                        if (trainingGroup.needsRoom) {
-                            // 会議室が必要な場合、空きがあるかチェック（参加者全員の人数で）
-                            if (!isAnyRoomAvailable(trainingGroup.attendees.length, proposedStart, proposedEnd)) {
-                                writeLog('DEBUG', '時間枠 ' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'HH:mm') + '-' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ' は参加者全員が空いているが、利用可能な会議室がないためスキップ');
-                                continue; // 利用可能な会議室がないため、次の時間枠へ
-                            }
-                        }
-
-                        // この時間枠は利用可能
-                        writeLog('INFO', '代替時間枠発見: ' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
-                                 '-' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + 
-                                 ' (実施日' + (trainingGroup.implementationDay || '未指定') + '営業日目)');
-                        return {
-                            start: proposedStart,
-                            end: proposedEnd
-                        };
-                    }
-                }
-            }
-        }
-        
-        // 次の日へ
-        currentDate.setDate(currentDate.getDate() + 1);
-    }
-    
-    writeLog('WARN', '代替時間枠が見つかりませんでした: ' + trainingGroup.name + ' (実施日: ' + (trainingGroup.implementationDay || '未指定') + '営業日目)');
-    return null;
+    return { available: true, reason: '' };
 }
 
 /**
@@ -1090,45 +1036,79 @@ function generateEventUniqueKey(trainingGroup) {
 }
 
 /**
- * 指定した時間枠が利用可能かチェック
+ * 指定した時間枠が利用可能かチェック（重複問題修正版）
  * @param {Date} proposedStart - 提案開始時間
  * @param {Date} proposedEnd - 提案終了時間
  * @param {Object} trainingGroup - チェック対象の研修グループ
  * @returns {boolean} 利用可能かどうか
  */
 function isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup) {
+    writeLog('DEBUG', '時間枠利用可能性チェック: ' + trainingGroup.name + ' (' + 
+             Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+             Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'MM/dd HH:mm') + ')');
+    
     var proposedAttendees = trainingGroup.attendees || [];
-    var lecturerEmail = trainingGroup.lecturer;
+    var lecturerEmails = trainingGroup.lecturerEmails || (trainingGroup.lecturer ? [trainingGroup.lecturer] : []);
 
-    // 1. 既にこの実行でスケジュールされたイベントとの重複チェック
+    // 1. 既にこの実行でスケジュールされたイベントとの重複チェック（厳密化）
     for (var i = 0; i < scheduledEvents.length; i++) {
         var scheduledEvent = scheduledEvents[i];
-        var scheduledAttendees = scheduledEvent.attendees || [];
-
-        // 参加者に重複があるかチェック（講師も参加者に含まれる）
-        var hasOverlappingAttendee = proposedAttendees.some(function(attendee) {
-            return scheduledAttendees.indexOf(attendee) !== -1;
-        });
         
-        if (hasOverlappingAttendee) {
-            // 時間重複チェック
-            if (!(proposedEnd <= scheduledEvent.startTime || proposedStart >= scheduledEvent.endTime)) {
-                writeLog('DEBUG', '時間重複検出（内部スケジュール）: ' + 
-                         trainingGroup.name + ' と ' + scheduledEvent.name + ' で参加者重複');
-                return false;
+        // まず時間重複があるかをチェック
+        if (!(proposedEnd <= scheduledEvent.startTime || proposedStart >= scheduledEvent.endTime)) {
+            writeLog('DEBUG', '時間重複発見: ' + trainingGroup.name + ' vs ' + scheduledEvent.name + 
+                     ' (' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                     Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ' vs ' +
+                     Utilities.formatDate(scheduledEvent.startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                     Utilities.formatDate(scheduledEvent.endTime, 'Asia/Tokyo', 'HH:mm') + ')');
+            
+            // **厳密チェック: 同一開始時刻は絶対に許可しない**
+            if (proposedStart.getTime() === scheduledEvent.startTime.getTime()) {
+                var reason = '同一開始時刻の重複: ' + scheduledEvent.name;
+                writeLog('DEBUG', '同一開始時刻により利用不可: ' + trainingGroup.name + ' vs ' + scheduledEvent.name);
+                return { available: false, reason: reason };
+            }
+            
+            // 時間重複がある場合、参加者重複もチェック
+            var scheduledAttendees = scheduledEvent.attendees || [];
+            var hasOverlappingAttendee = proposedAttendees.some(function(attendee) {
+                return scheduledAttendees.indexOf(attendee) !== -1;
+            });
+            
+            if (hasOverlappingAttendee) {
+                var reason = '参加者重複: ' + scheduledEvent.name;
+                writeLog('DEBUG', '時間・参加者重複により利用不可: ' + trainingGroup.name + ' vs ' + scheduledEvent.name);
+                return { available: false, reason: reason };
+            }
+
+            // 講師の重複もチェック
+            var scheduledLecturers = scheduledEvent.lecturerEmails || (scheduledEvent.lecturer ? [scheduledEvent.lecturer] : []);
+            var hasOverlappingLecturer = lecturerEmails.some(function(lecturer) {
+                return scheduledLecturers.indexOf(lecturer) !== -1;
+            });
+
+            if (hasOverlappingLecturer) {
+                 var reason = '講師重複: ' + scheduledEvent.name;
+                 writeLog('DEBUG', '時間・講師重複により利用不可: ' + trainingGroup.name + ' vs ' + scheduledEvent.name);
+                 return { available: false, reason: reason };
             }
         }
     }
     
-    // 2. 講師のGoogleカレンダーとの重複チェック (改善版)
-    if (lecturerEmail && lecturerEmail.trim() !== '') {
-        if (!isLecturerAvailable(lecturerEmail, proposedStart, proposedEnd)) {
-            writeLog('DEBUG', '講師の予定と重複により利用不可: ' + lecturerEmail);
-            return false;
+    // 2. 講師のGoogleカレンダーとの重複チェック
+    for (var j = 0; j < lecturerEmails.length; j++) {
+        var email = lecturerEmails[j];
+        if (email && email.trim() !== '') {
+            var lecturerCheck = isLecturerAvailable(email, proposedStart, proposedEnd);
+            if (!lecturerCheck.available) {
+                writeLog('DEBUG', '講師の予定と重複により利用不可: ' + email);
+                return lecturerCheck;
+            }
         }
     }
     
-    return true;
+    writeLog('DEBUG', '時間枠利用可能: ' + trainingGroup.name);
+    return { available: true, reason: '' };
 }
 
 /**
@@ -1136,7 +1116,7 @@ function isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup) {
  * @param {string} lecturerEmail - 講師のメールアドレス
  * @param {Date} proposedStart - 提案開始時間
  * @param {Date} proposedEnd - 提案終了時間
- * @returns {boolean} 講師が空いている場合true
+ * @returns {Object} {available: boolean, reason: string}
  */
 function isLecturerAvailable(lecturerEmail, proposedStart, proposedEnd) {
     try {
@@ -1145,13 +1125,13 @@ function isLecturerAvailable(lecturerEmail, proposedStart, proposedEnd) {
         var lecturerCalendar = CalendarApp.getCalendarById(lecturerEmail);
         if (!lecturerCalendar) {
             writeLog('WARN', '講師のカレンダーにアクセスできません: ' + lecturerEmail);
-            return true; // アクセスできない場合は空いているとみなす
+            return { available: true, reason: '' }; // アクセスできない場合は空いているとみなす
         }
         
         var existingEvents = lecturerCalendar.getEvents(proposedStart, proposedEnd);
         if (existingEvents.length === 0) {
             writeLog('DEBUG', '講師カレンダーに予定なし');
-            return true;
+            return { available: true, reason: '' };
         }
         
         writeLog('DEBUG', '講師の既存予定候補: ' + existingEvents.length + '件');
@@ -1170,20 +1150,21 @@ function isLecturerAvailable(lecturerEmail, proposedStart, proposedEnd) {
             
             // 実際の時間重複チェック
             if (!(proposedEnd <= eventStart || proposedStart >= eventEnd)) {
+                var reason = '講師予定重複(' + lecturerEmail.split('@')[0] + '): ' + event.getTitle();
                 writeLog('DEBUG', '講師予定と時間重複: ' + event.getTitle() + ' (' + 
                          Utilities.formatDate(eventStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
                          '-' + Utilities.formatDate(eventEnd, 'Asia/Tokyo', 'HH:mm') + ')');
-                return false;
+                return { available: false, reason: reason };
             }
         }
         
         writeLog('DEBUG', '講師カレンダー重複なし');
-        return true;
+        return { available: true, reason: '' };
         
     } catch (e) {
         writeLog('WARN', '講師カレンダーチェックでエラー: ' + e.message + ' (講師: ' + lecturerEmail + ')');
         // エラーの場合は空いているとみなす（厳格すぎるより寛容に）
-        return true;
+        return { available: true, reason: '' };
     }
 }
 
@@ -1359,17 +1340,19 @@ function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDat
             }
             
             // 時間枠を確保
-            var eventTime = findAvailableTimeSlot(group, hireDate);
-            if (!eventTime) {
-                writeLog('ERROR', '時間枠確保失敗: ' + group.name);
+            var eventTimeResult = findAvailableTimeSlot(group, hireDate);
+            if (!eventTimeResult.time) {
+                writeLog('ERROR', '時間枠確保失敗: ' + group.name + ' - ' + eventTimeResult.reason);
                 updateMappingSheetRow(mappingSheet, rowIndex, {
                     status: '失敗（時間枠未確保）',
                     roomName: group.needsRoom ? '会議室未確保' : 'オンライン',
-                    schedule: '時間枠未確保'
+                    schedule: '時間枠未確保',
+                    errorReason: eventTimeResult.reason
                 });
                 errorCount++;
                 continue;
             }
+            var eventTime = eventTimeResult.time;
             
             // 会議室確保
             var roomName = null;
