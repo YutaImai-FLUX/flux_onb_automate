@@ -3,9 +3,9 @@
 // =========================================
 
 /**
- * 参加人数に合う会議室名を検索する
+ * 参加人数に合う会議室名を検索する（ハイブリッド対応）
  * @param {number} numberOfAttendees - 参加者数
- * @returns {string} 会議室名
+ * @returns {Object} {roomName: string, isHybrid: boolean, maxCapacity: number}
  */
 function findAvailableRoomName(numberOfAttendees) {
     writeLog('DEBUG', '会議室検索関数開始: 必要人数=' + numberOfAttendees);
@@ -24,6 +24,8 @@ function findAvailableRoomName(numberOfAttendees) {
         
         // 条件を満たす会議室を収集
         var suitableRooms = [];
+        var allAvailableRooms = []; // ハイブリッド用（定員不足でも利用可能な会議室）
+        
         for (var i = 0; i < data.length; i++) {
             var row = data[i];
             var roomName = row[0]; // A列: 会議室名
@@ -39,6 +41,14 @@ function findAvailableRoomName(numberOfAttendees) {
                 continue;
             }
             
+            // 利用可能な会議室として記録（定員に関係なく）
+            allAvailableRooms.push({
+                name: roomName,
+                calendarId: calendarId,
+                capacity: capacity
+            });
+            
+            // 完全収容可能な会議室として記録
             if (capacity >= numberOfAttendees) {
                 suitableRooms.push({
                     name: roomName,
@@ -49,20 +59,49 @@ function findAvailableRoomName(numberOfAttendees) {
             }
         }
         
-        if (suitableRooms.length === 0) {
-            throw new Error('定員 ' + numberOfAttendees + ' 名以上の会議室が見つかりませんでした。');
+        // 完全収容可能な会議室がある場合
+        if (suitableRooms.length > 0) {
+            // 定員でソートして最小の適合会議室を選択
+            suitableRooms.sort(function(a, b) {
+                return a.capacity - b.capacity;
+            });
+            
+            var selectedRoom = suitableRooms[0];
+            writeLog('INFO', '最適会議室選択: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + 
+                     ', 必要人数: ' + numberOfAttendees + ', 無駄席数: ' + (selectedRoom.capacity - numberOfAttendees) + ')');
+            
+            return {
+                roomName: selectedRoom.name,
+                isHybrid: false,
+                maxCapacity: selectedRoom.capacity
+            };
         }
         
-        // 定員でソートして最小の適合会議室を選択
-        suitableRooms.sort(function(a, b) {
-            return a.capacity - b.capacity;
-        });
+        // 完全収容不可能な場合、最大定員の会議室でハイブリッド開催
+        if (allAvailableRooms.length > 0) {
+            // 定員でソート（降順：最大定員から）
+            allAvailableRooms.sort(function(a, b) {
+                return b.capacity - a.capacity;
+            });
+            
+            var largestRoom = allAvailableRooms[0];
+            var onlineParticipants = numberOfAttendees - largestRoom.capacity;
+            
+            writeLog('INFO', 'ハイブリッド開催選択: ' + largestRoom.name + ' (定員: ' + largestRoom.capacity + 
+                     ', 必要人数: ' + numberOfAttendees + ', 会議室参加: ' + largestRoom.capacity + 
+                     '名, オンライン参加: ' + onlineParticipants + '名)');
+            
+            return {
+                roomName: largestRoom.name + ' + オンライン',
+                isHybrid: true,
+                maxCapacity: largestRoom.capacity,
+                onlineCount: onlineParticipants,
+                actualRoomName: largestRoom.name
+            };
+        }
         
-        var selectedRoom = suitableRooms[0];
-        writeLog('INFO', '最適会議室選択: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + 
-                 ', 必要人数: ' + numberOfAttendees + ', 無駄席数: ' + (selectedRoom.capacity - numberOfAttendees) + ')');
-        
-        return selectedRoom.name;
+        // 会議室が全く利用できない場合
+        throw new Error('利用可能な会議室が見つかりませんでした。');
         
     } catch (e) {
         writeLog('ERROR', '会議室検索でエラー: ' + e.message);
@@ -71,21 +110,25 @@ function findAvailableRoomName(numberOfAttendees) {
 }
 
 /**
- * 会議室を時間枠と併せて確保する
+ * 会議室を時間枠と併せて確保する（新会議室管理システム対応）
  * @param {number} numberOfAttendees - 参加者数
  * @param {Date} startTime - 開始時間
  * @param {Date} endTime - 終了時間
- * @returns {string} 会議室名
+ * @param {string} trainingName - 研修名
+ * @returns {Object} {roomName: string, isHybrid: boolean, capacity: number, onlineCount: number|null}
  */
-function findAndReserveRoom(numberOfAttendees, startTime, endTime) {
+function findAndReserveRoom(numberOfAttendees, startTime, endTime, trainingName) {
     writeLog('DEBUG', '会議室確保開始: 必要人数=' + numberOfAttendees + ', 時間=' + 
              Utilities.formatDate(startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
-             Utilities.formatDate(endTime, 'Asia/Tokyo', 'HH:mm'));
+             Utilities.formatDate(endTime, 'Asia/Tokyo', 'HH:mm') + ', 研修=' + (trainingName || '未指定'));
     
     // 参加者数が無効な場合はエラー
     if (!numberOfAttendees || numberOfAttendees <= 0) {
         throw new Error('参加者数が0以下です: ' + numberOfAttendees);
     }
+    
+    var roomManager = RoomReservationManager.getInstance();
+    roomManager.logCurrentReservations(); // デバッグ用
     
     try {
         var sheet = SpreadsheetApp.openById(SPREADSHEET_IDS.ROOM_MASTER).getSheetByName(SHEET_NAMES.ROOM_MASTER);
@@ -97,76 +140,95 @@ function findAndReserveRoom(numberOfAttendees, startTime, endTime) {
         
         var data = sheet.getRange(2, 1, lastRow - 1, 4).getValues(); // D列まで取得
         
-        // 条件を満たす会議室を収集
-        var suitableRooms = [];
+        var availableRooms = [];
         for (var i = 0; i < data.length; i++) {
             var row = data[i];
-            var roomName = row[0]; // A列: 会議室名
-            var calendarId = row[1]; // B列: カレンダーID
-            var capacity = row[2]; // C列: 定員
-            var onbAvailable = row[3]; // D列: ONB研修対象
+            var roomName = row[0];
+            var calendarId = row[1];
+            var capacity = row[2];
+            var onbAvailable = row[3];
             
-            // ONB研修対象チェック：「利用可能」でない場合はスキップ
-            if (onbAvailable !== '利用可能') {
-                writeLog('DEBUG', 'ONB研修対象外のためスキップ: ' + roomName + ' (ONB研修対象: ' + onbAvailable + ')');
+            if (onbAvailable !== '利用可能') continue;
+            
+            // 新予約管理システムで内部重複チェック
+            if (!roomManager.isRoomAvailable(roomName, startTime, endTime)) {
+                writeLog('DEBUG', '内部予約システムで使用中のためスキップ: ' + roomName);
                 continue;
             }
             
-            if (capacity >= numberOfAttendees) {
-                // カレンダーIDを使って直接会議室の可用性をチェック
-                if (calendarId && isGoogleCalendarRoomAvailable(calendarId, startTime, endTime)) {
-                    suitableRooms.push({
-                        name: roomName,
-                        capacity: capacity,
-                        calendarId: calendarId,
-                        resourceEmail: calendarId,
-                        resourceName: roomName
-                    });
-                    writeLog('DEBUG', '利用可能会議室: ' + roomName + ' (定員: ' + capacity + ', カレンダーID: ' + calendarId + ')');
-                } else if (calendarId) {
-                    writeLog('DEBUG', 'Googleカレンダー上で時間重複により利用不可: ' + roomName + ' (カレンダーID: ' + calendarId + ')');
-                } else {
-                    writeLog('WARN', 'カレンダーIDが設定されていません: ' + roomName);
-                    // フォールバック: ローカル管理での可用性チェック
-                    if (isRoomAvailable(roomName, startTime, endTime)) {
-                        suitableRooms.push({
-                            name: roomName,
-                            capacity: capacity,
-                            calendarId: null,
-                            resourceEmail: null,
-                            resourceName: roomName
-                        });
-                        writeLog('DEBUG', 'フォールバック利用可能会議室: ' + roomName + ' (定員: ' + capacity + ')');
-                    }
-                }
+            // Googleカレンダー上での重複チェック
+            if (calendarId && isGoogleCalendarRoomAvailable(calendarId, startTime, endTime)) {
+                availableRooms.push({
+                    name: roomName,
+                    capacity: capacity,
+                    calendarId: calendarId,
+                    resourceEmail: calendarId,
+                    resourceName: roomName
+                });
+                writeLog('DEBUG', '利用可能会議室: ' + roomName + ' (定員: ' + capacity + ')');
+            } else {
+                writeLog('DEBUG', 'Googleカレンダーで使用中のためスキップ: ' + roomName);
             }
         }
         
-        if (suitableRooms.length === 0) {
-            throw new Error('指定時間に利用可能で定員 ' + numberOfAttendees + ' 名以上の会議室が見つかりませんでした。');
+        if (availableRooms.length === 0) {
+            throw new Error('指定時間に利用可能な会議室が見つかりませんでした。');
+        }
+
+        // 参加者全員を収容できる会議室を検索
+        var suitableRooms = availableRooms.filter(function(room) {
+            return room.capacity >= numberOfAttendees;
+        });
+        
+        var selectedRoom;
+        var isHybrid = false;
+        var onlineCount = 0;
+
+        if (suitableRooms.length > 0) {
+            // 8名超えの場合は、8名以上収容可能な会議室を優先選択
+            if (numberOfAttendees > 8) {
+                var eightPlusRooms = suitableRooms.filter(function(room) {
+                    return room.capacity >= 8;
+                });
+                
+                if (eightPlusRooms.length > 0) {
+                    // 8名以上収容可能な会議室の中から最適なものを選択
+                    eightPlusRooms.sort(function(a, b) { return a.capacity - b.capacity; });
+                    selectedRoom = eightPlusRooms[0];
+                    writeLog('INFO', '8名超え対応: 8名以上収容会議室選択: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + ', 必要人数: ' + numberOfAttendees + ')');
+                } else {
+                    // 8名以上収容可能な会議室がない場合は通常ロジック
+                    suitableRooms.sort(function(a, b) { return a.capacity - b.capacity; });
+                    selectedRoom = suitableRooms[0];
+                    writeLog('WARN', '8名超えだが8名以上の会議室なし: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + ', 必要人数: ' + numberOfAttendees + ')');
+                }
+            } else {
+                // 8名以下の場合は通常の最適会議室選択
+                suitableRooms.sort(function(a, b) { return a.capacity - b.capacity; });
+                selectedRoom = suitableRooms[0];
+                writeLog('INFO', '最適会議室選択: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + ', 必要人数: ' + numberOfAttendees + ')');
+            }
+        } else {
+            // 全員を収容できない場合、最大の会議室を選択してハイブリッド開催
+            availableRooms.sort(function(a, b) { return b.capacity - a.capacity; });
+            selectedRoom = availableRooms[0];
+            isHybrid = true;
+            onlineCount = numberOfAttendees - selectedRoom.capacity;
+            writeLog('INFO', 'ハイブリッド開催で最大会議室選択: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + ', オンライン参加: ' + onlineCount + '名)');
         }
         
-        // 定員でソートして最小の適合会議室を選択
-        suitableRooms.sort(function(a, b) {
-            return a.capacity - b.capacity;
-        });
+        // 新予約管理システムで会議室を予約
+        if (!roomManager.reserveRoom(selectedRoom.name, selectedRoom.calendarId, startTime, endTime, trainingName || '未指定研修')) {
+            throw new Error('会議室の予約に失敗しました: ' + selectedRoom.name);
+        }
         
-        var selectedRoom = suitableRooms[0];
-        
-        // 会議室を予約
-        scheduledRooms.push({
-            roomName: selectedRoom.name,
-            calendarId: selectedRoom.calendarId,
-            resourceEmail: selectedRoom.resourceEmail,
-            startTime: startTime,
-            endTime: endTime
-        });
-        
-        writeLog('INFO', '会議室確保成功: ' + selectedRoom.name + ' (定員: ' + selectedRoom.capacity + 
-                 ', 必要人数: ' + numberOfAttendees + ', 無駄席数: ' + (selectedRoom.capacity - numberOfAttendees) + 
-                 ', カレンダーID: ' + (selectedRoom.calendarId || '未設定') + ')');
-        
-        return selectedRoom.resourceName || selectedRoom.name;
+        return {
+            roomName: selectedRoom.resourceName || selectedRoom.name,
+            isHybrid: isHybrid,
+            capacity: selectedRoom.capacity,
+            onlineCount: onlineCount,
+            calendarId: selectedRoom.calendarId
+        };
         
     } catch (e) {
         writeLog('ERROR', '会議室確保でエラー: ' + e.message);
@@ -317,28 +379,154 @@ function isGoogleCalendarRoomAvailable(resourceEmail, startTime, endTime) {
 }
 
 /**
- * 指定した時間枠で会議室が利用可能かチェック（従来のローカル管理）
+ * 指定した時間枠で会議室が利用可能かチェック（RoomReservationManager使用）
  * @param {string} roomName - 会議室名
  * @param {Date} startTime - 開始時間
  * @param {Date} endTime - 終了時間
  * @returns {boolean} 利用可能かどうか
  */
 function isRoomAvailable(roomName, startTime, endTime) {
-    for (var i = 0; i < scheduledRooms.length; i++) {
-        var reservation = scheduledRooms[i];
-        if (reservation.roomName === roomName) {
-            // 時間重複チェック
-            if (!(endTime <= reservation.startTime || startTime >= reservation.endTime)) {
-                return false;
-            }
-        }
-    }
-    return true;
+    var roomManager = RoomReservationManager.getInstance();
+    return roomManager.isRoomAvailable(roomName, startTime, endTime);
 }
 
 // グローバル変数：スケジュール管理用
 var scheduledEvents = [];
-var scheduledRooms = []; // 会議室の時間枠管理
+// 注意: scheduledRooms配列は廃止し、RoomReservationManagerに統一
+
+// =========================================
+// 会議室予約管理システム
+// =========================================
+
+/**
+ * 会議室予約管理クラス（シングルトンパターン）
+ */
+var RoomReservationManager = (function() {
+    var instance = null;
+    
+    function createInstance() {
+        var reservations = []; // 予約情報を格納
+        
+        return {
+            /**
+             * 予約情報をリセット
+             */
+            reset: function() {
+                reservations = [];
+                writeLog('INFO', '会議室予約管理をリセットしました');
+            },
+            
+            /**
+             * 会議室が指定時間に利用可能かチェック
+             * @param {string} roomName - 会議室名
+             * @param {Date} startTime - 開始時間
+             * @param {Date} endTime - 終了時間
+             * @returns {boolean} 利用可能かどうか
+             */
+            isRoomAvailable: function(roomName, startTime, endTime) {
+                for (var i = 0; i < reservations.length; i++) {
+                    var reservation = reservations[i];
+                    if (reservation.roomName === roomName) {
+                        // 時間重複チェック（終了時間 <= 開始時間 または 開始時間 >= 終了時間でなければ重複）
+                        if (!(endTime <= reservation.startTime || startTime >= reservation.endTime)) {
+                            writeLog('DEBUG', '会議室重複検出: ' + roomName + ' (' + 
+                                     Utilities.formatDate(startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                                     Utilities.formatDate(endTime, 'Asia/Tokyo', 'HH:mm') + ') vs 既存予約(' +
+                                     Utilities.formatDate(reservation.startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                                     Utilities.formatDate(reservation.endTime, 'Asia/Tokyo', 'HH:mm') + ')');
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            },
+            
+            /**
+             * 会議室を予約
+             * @param {string} roomName - 会議室名
+             * @param {string} calendarId - カレンダーID
+             * @param {Date} startTime - 開始時間
+             * @param {Date} endTime - 終了時間
+             * @param {string} trainingName - 研修名
+             * @returns {boolean} 予約成功かどうか
+             */
+            reserveRoom: function(roomName, calendarId, startTime, endTime, trainingName) {
+                if (!this.isRoomAvailable(roomName, startTime, endTime)) {
+                    writeLog('WARN', '会議室予約失敗（時間重複）: ' + roomName + ' for ' + trainingName);
+                    return false;
+                }
+                
+                var reservation = {
+                    roomName: roomName,
+                    calendarId: calendarId,
+                    startTime: new Date(startTime),
+                    endTime: new Date(endTime),
+                    trainingName: trainingName,
+                    reservedAt: new Date()
+                };
+                
+                reservations.push(reservation);
+                writeLog('INFO', '会議室予約成功: ' + roomName + ' (' + 
+                         Utilities.formatDate(startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                         Utilities.formatDate(endTime, 'Asia/Tokyo', 'HH:mm') + ') for ' + trainingName);
+                return true;
+            },
+            
+            /**
+             * 現在の予約状況を取得
+             * @returns {Array} 予約情報の配列
+             */
+            getReservations: function() {
+                return reservations.slice(); // コピーを返す
+            },
+            
+            /**
+             * 特定の研修の予約を削除
+             * @param {string} trainingName - 研修名
+             * @returns {boolean} 削除成功かどうか
+             */
+            cancelReservation: function(trainingName) {
+                var originalLength = reservations.length;
+                reservations = reservations.filter(function(reservation) {
+                    return reservation.trainingName !== trainingName;
+                });
+                var deleted = originalLength - reservations.length;
+                if (deleted > 0) {
+                    writeLog('INFO', '会議室予約削除: ' + trainingName + ' (' + deleted + '件)');
+                    return true;
+                }
+                return false;
+            },
+            
+            /**
+             * デバッグ用：現在の予約状況をログ出力
+             */
+            logCurrentReservations: function() {
+                writeLog('DEBUG', '=== 現在の会議室予約状況 ===');
+                if (reservations.length === 0) {
+                    writeLog('DEBUG', '予約なし');
+                } else {
+                    for (var i = 0; i < reservations.length; i++) {
+                        var res = reservations[i];
+                        writeLog('DEBUG', (i + 1) + '. ' + res.roomName + ' (' + 
+                                 Utilities.formatDate(res.startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                                 Utilities.formatDate(res.endTime, 'Asia/Tokyo', 'HH:mm') + ') - ' + res.trainingName);
+                    }
+                }
+                writeLog('DEBUG', '=== 予約状況終了 ===');
+            }
+        };
+    }
+    
+    return {
+        getInstance: function() {
+            if (!instance) {
+                instance = createInstance();
+            }
+            return instance;
+        }
+    };
+})();
 
 /**
  * 全ての研修のカレンダーイベントを作成する（時間重複を回避）
@@ -350,7 +538,10 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
     
     // スケジュール管理用配列をリセット
     scheduledEvents = [];
-    scheduledRooms = [];
+    
+    // 会議室予約管理システムをリセット
+    var roomManager = RoomReservationManager.getInstance();
+    roomManager.reset();
     
     // 研修グループは既にLogic.gsでソート済みなので、順序をそのまま使用
     var sortedGroups = trainingGroups.slice();
@@ -362,28 +553,18 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
         
         writeLog('INFO', '研修処理開始: ' + group.name + ' (ユニークキー: ' + (group.uniqueKey || 'なし') + ')');
         
-        // ユニークキーベースで重複チェック
+        // 改善されたユニークキーによる重複チェック
+        var eventUniqueKey = generateEventUniqueKey(group);
         var isDuplicate = false;
-        if (group.uniqueKey) {
-            for (var j = 0; j < scheduledEvents.length; j++) {
-                var existingEvent = scheduledEvents[j];
-                if (existingEvent.uniqueKey === group.uniqueKey) {
-                    writeLog('WARN', '重複イベントを検出、スキップ: ' + group.name + ' (ユニークキー: ' + group.uniqueKey + ')');
-                    isDuplicate = true;
-                    break;
-                }
-            }
-        } else {
-            // ユニークキーがない場合は従来の方法でチェック
-            for (var j = 0; j < scheduledEvents.length; j++) {
-                var existingEvent = scheduledEvents[j];
-                if (existingEvent.name === group.name && 
-                    existingEvent.lecturer === group.lecturer &&
-                    JSON.stringify(existingEvent.attendees.sort()) === JSON.stringify(group.attendees.sort())) {
-                    writeLog('WARN', '重複イベントを検出、スキップ: ' + group.name + ' (講師: ' + group.lecturer + ')');
-                    isDuplicate = true;
-                    break;
-                }
+        
+        for (var j = 0; j < scheduledEvents.length; j++) {
+            var existingEvent = scheduledEvents[j];
+            var existingUniqueKey = existingEvent.uniqueKey || generateEventUniqueKey(existingEvent);
+            
+            if (eventUniqueKey === existingUniqueKey) {
+                writeLog('WARN', '重複イベントを検出、スキップ: ' + group.name + ' (ユニークキー: ' + eventUniqueKey + ')');
+                isDuplicate = true;
+                break;
             }
         }
         
@@ -434,6 +615,8 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
         // 会議室が必要な場合は確保（時間枠も考慮）
         var roomName = null;
         var roomError = null;
+        var roomReservation = null; // 会議室予約情報を保持する変数
+
         if (group.needsRoom) {
             try {
                 // 会議室定員は講師＋参加者の総数で計算（講師も席が必要）
@@ -443,13 +626,13 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
                          Utilities.formatDate(eventTime.start, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
                          Utilities.formatDate(eventTime.end, 'Asia/Tokyo', 'HH:mm'));
                 
-                roomName = findAndReserveRoom(totalAttendeeCount, eventTime.start, eventTime.end);
-                writeLog('INFO', '会議室確保成功: ' + roomName + ' (研修: ' + group.name + ', 総参加者: ' + totalAttendeeCount + '名, 講師' + lecturerCount + '名+参加者' + participantCount + '名)');
+                roomReservation = findAndReserveRoom(totalAttendeeCount, eventTime.start, eventTime.end, group.name);
+                roomName = roomReservation.roomName; // 実際の会議室名
+                writeLog('INFO', '会議室確保成功: ' + roomName + ' (研修: ' + group.name + ', 総参加者: ' + totalAttendeeCount + '名)');
             } catch (e) {
                 writeLog('ERROR', '会議室確保失敗: ' + e.message + ' (研修: ' + group.name + ')');
                 roomName = '会議室未確保';
                 roomError = '会議室確保失敗: ' + e.message;
-                // 会議室確保に失敗してもカレンダーイベントは作成する
             }
         } else {
             roomName = 'オンライン';
@@ -457,7 +640,8 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
         
         // カレンダーイベント作成
         try {
-            createSingleCalendarEvent(group, roomName, eventTime.start, eventTime.end);
+            // roomReservationオブジェクトを渡す
+            createSingleCalendarEvent(group, roomReservation, eventTime.start, eventTime.end);
             
             // カレンダーイベントIDが正しく設定されているかチェック
             if (!group.calendarEventId) {
@@ -466,16 +650,20 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
             }
             
             // スケジュール管理配列に追加
-            scheduledEvents.push({
+            var scheduledEvent = {
                 name: group.name,
                 lecturer: group.lecturer,
+                lecturerEmails: group.lecturerEmails,
+                implementationDay: group.implementationDay,
+                sequence: group.sequence,
                 startTime: eventTime.start,
                 endTime: eventTime.end,
                 attendees: group.attendees.slice(),
-                uniqueKey: group.uniqueKey,
+                uniqueKey: eventUniqueKey,
                 roomName: roomName,
                 calendarEventId: group.calendarEventId
-            });
+            };
+            scheduledEvents.push(scheduledEvent);
             
             scheduleResults.push({
                 training: group,
@@ -505,7 +693,7 @@ function createAllCalendarEvents(trainingGroups, hireDate) {
 }
 
 /**
- * 指定した時間枠で利用可能な会議室があるかチェックする（予約はしない）
+ * 指定した時間枠で利用可能な会議室があるかチェックする（予約はしない）- 新予約管理システム対応
  * @param {number} numberOfAttendees - 参加者数
  * @param {Date} startTime - 開始時間
  * @param {Date} endTime - 終了時間
@@ -515,6 +703,9 @@ function isAnyRoomAvailable(numberOfAttendees, startTime, endTime) {
     writeLog('DEBUG', '利用可能な会議室の存在チェック: 必要人数=' + numberOfAttendees + ', 時間=' + 
              Utilities.formatDate(startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
              Utilities.formatDate(endTime, 'Asia/Tokyo', 'HH:mm'));
+    
+    var roomManager = RoomReservationManager.getInstance();
+    
     try {
         var sheet = SpreadsheetApp.openById(SPREADSHEET_IDS.ROOM_MASTER).getSheetByName(SHEET_NAMES.ROOM_MASTER);
         var lastRow = sheet.getLastRow();
@@ -536,21 +727,25 @@ function isAnyRoomAvailable(numberOfAttendees, startTime, endTime) {
             }
             
             if (capacity >= numberOfAttendees) {
-                // この実行で確保済みの会議室リストと重複していないかチェック
-                if (!isRoomAvailable(roomName, startTime, endTime)) {
-                    writeLog('DEBUG', '内部スケジュールで予約済みのためスキップ: ' + roomName);
-                    continue; 
+                // 予約管理システムで内部重複チェック
+                if (!roomManager.isRoomAvailable(roomName, startTime, endTime)) {
+                    writeLog('DEBUG', '予約管理システムで使用中のためスキップ: ' + roomName);
+                    continue;
                 }
 
                 // Googleカレンダー上で空いているかチェック
                 if (calendarId && isGoogleCalendarRoomAvailable(calendarId, startTime, endTime)) {
-                    writeLog('DEBUG', '利用可能な会議室を発見: ' + roomName);
+                    writeLog('DEBUG', '利用可能な会議室を発見: ' + roomName + ' (定員: ' + capacity + ', 必要人数: ' + numberOfAttendees + ')');
                     return true;
+                } else {
+                    writeLog('DEBUG', 'Googleカレンダーで使用中のためスキップ: ' + roomName);
                 }
+            } else {
+                writeLog('DEBUG', '定員不足のためスキップ: ' + roomName + ' (定員: ' + capacity + ', 必要人数: ' + numberOfAttendees + ')');
             }
         }
         
-        writeLog('DEBUG', '利用可能な会議室が見つかりませんでした');
+        writeLog('DEBUG', '利用可能な会議室が見つかりませんでした（チェック対象: ' + data.length + '室）');
         return false;
     } catch (e) {
         writeLog('WARN', '会議室の空き状況チェックでエラー: ' + e.message);
@@ -559,7 +754,7 @@ function isAnyRoomAvailable(numberOfAttendees, startTime, endTime) {
 }
 
 /**
- * 講師の空き時間を考慮して適切な時間枠を見つける（実施日を考慮）
+ * 講師の空き時間を考慮して適切な時間枠を見つける（実施日・実施順を考慮）
  * @param {Object} trainingGroup - 研修グループ
  * @param {Date} hireDate - 入社日
  * @returns {Object|null} {start: Date, end: Date} または null
@@ -573,18 +768,167 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
         }
     }
     
-    writeLog('DEBUG', '時間枠検索開始: ' + trainingGroup.name + ' (時間: ' + durationMinutes + '分, 実施日: ' + (trainingGroup.implementationDay || '未指定') + '営業日目)');
+    var implementationDay = trainingGroup.implementationDay || 50;
+    var sequence = trainingGroup.sequence || 100;
+    
+    writeLog('DEBUG', '時間枠検索開始: ' + trainingGroup.name + ' (時間: ' + durationMinutes + '分, 実施日: ' + implementationDay + '営業日目, 実施順: ' + sequence + ')');
     
     // 実施日が指定されている場合は、入社日を基準にその日を計算
     var targetDate = null;
-    if (trainingGroup.implementationDay && trainingGroup.implementationDay !== 999) {
-        targetDate = calculateImplementationDate(hireDate, trainingGroup.implementationDay);
-        writeLog('DEBUG', '指定実施日: ' + trainingGroup.implementationDay + '営業日目 = ' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd(E)'));
+    if (implementationDay && implementationDay !== 50 && implementationDay !== 999) {
+        targetDate = calculateImplementationDate(hireDate, implementationDay);
+        writeLog('DEBUG', '指定実施日: ' + implementationDay + '営業日目 = ' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd(E)'));
     } else {
         // 実施日が指定されていない場合は入社日当日から検索
         targetDate = new Date(hireDate);
         writeLog('DEBUG', '実施日未指定のため、入社日から検索: ' + Utilities.formatDate(targetDate, 'Asia/Tokyo', 'yyyy/MM/dd(E)'));
     }
+    
+    // **新機能**: 実施日 + 実施順に基づく優先時間枠の計算
+    var preferredTimeSlot = calculatePreferredTimeSlot(targetDate, implementationDay, sequence, durationMinutes);
+    if (preferredTimeSlot) {
+        writeLog('INFO', '優先時間枠計算: ' + trainingGroup.name + ' → ' + 
+                 Utilities.formatDate(preferredTimeSlot.start, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                 Utilities.formatDate(preferredTimeSlot.end, 'Asia/Tokyo', 'HH:mm'));
+        
+        // 優先時間枠が利用可能かチェック
+        if (isProposedTimeSlotAvailable(preferredTimeSlot.start, preferredTimeSlot.end, trainingGroup)) {
+            writeLog('INFO', '優先時間枠確保成功: ' + trainingGroup.name);
+            return preferredTimeSlot;
+        } else {
+            writeLog('WARN', '優先時間枠が利用不可、代替時間枠を検索: ' + trainingGroup.name);
+        }
+    }
+    
+    // 優先時間枠が使えない場合は従来ロジックで代替時間枠を検索
+    return findAlternativeTimeSlot(trainingGroup, hireDate, durationMinutes, targetDate);
+}
+
+/**
+ * 実施日と実施順に基づいて優先時間枠を計算する
+ * @param {Date} targetDate - 対象日
+ * @param {number} implementationDay - 実施日
+ * @param {number} sequence - 実施順
+ * @param {number} durationMinutes - 研修時間（分）
+ * @returns {Object|null} {start: Date, end: Date} または null
+ */
+function calculatePreferredTimeSlot(targetDate, implementationDay, sequence, durationMinutes) {
+    writeLog('DEBUG', '優先時間枠計算開始: 実施日=' + implementationDay + ', 実施順=' + sequence + ', 時間=' + durationMinutes + '分');
+    
+    // 平日でない場合はnullを返す
+    if (targetDate.getDay() === 0 || targetDate.getDay() === 6) {
+        writeLog('DEBUG', '土日のため優先時間枠計算をスキップ');
+        return null;
+    }
+    
+    var baseHour, baseMinute;
+    
+    // 実施日に基づく基準時間の設定
+    if (implementationDay === 1) {
+        // 1営業日目は15:00から開始
+        baseHour = 15;
+        baseMinute = 0;
+    } else if (implementationDay === 2) {
+        // 2営業日目は16:00から開始
+        baseHour = 16;
+        baseMinute = 0;
+    } else {
+        // その他の実施日は9:00から開始
+        baseHour = 9;
+        baseMinute = 0;
+    }
+    
+    // 実施順に基づく時間オフセットの計算
+    var timeOffsetMinutes = 0;
+    if (sequence && sequence !== 100 && sequence !== 999) {
+        // 実施順1は基準時間、実施順2以降は60分間隔で後ろにずらす
+        // 研修時間が60分未満でも、次の研修との間に余裕を持たせるため
+        var intervalMinutes = Math.max(60, durationMinutes); // 最低60分間隔
+        timeOffsetMinutes = (sequence - 1) * intervalMinutes;
+        writeLog('DEBUG', '実施順オフセット計算: 実施順' + sequence + ' → +' + timeOffsetMinutes + '分 (間隔: ' + intervalMinutes + '分)');
+    }
+    
+    // 開始時間の計算
+    var proposedStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), baseHour, baseMinute);
+    proposedStart.setMinutes(proposedStart.getMinutes() + timeOffsetMinutes);
+    
+    // 終了時間の計算
+    var proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
+    
+    // 昼休み時間帯（12:00-13:00）との重複チェック
+    if (isLunchTimeOverlap(proposedStart, proposedEnd)) {
+        writeLog('DEBUG', '昼休み時間帯と重複、13:00以降に調整');
+        // 昼休み後（13:00）を新しい基準時間として設定
+        var lunchAdjustedStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 13, 0);
+        lunchAdjustedStart.setMinutes(lunchAdjustedStart.getMinutes() + timeOffsetMinutes);
+        
+        // 調整後の時間が元の時間より後になることを確認
+        proposedStart = lunchAdjustedStart > proposedStart ? lunchAdjustedStart : proposedStart;
+        proposedEnd = new Date(proposedStart.getTime() + (durationMinutes * 60 * 1000));
+        
+        writeLog('DEBUG', '昼休み調整後: ' + 
+                 Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'HH:mm') + '-' + 
+                 Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
+    }
+    
+    // 営業時間内チェック
+    var maxEndTime = (implementationDay === 1) ? 20 : 19; // 1日目は20:00まで、その他は19:00まで
+    if (proposedEnd.getHours() > maxEndTime || (proposedEnd.getHours() === maxEndTime && proposedEnd.getMinutes() > 0)) {
+        writeLog('WARN', '営業時間外のため優先時間枠を計算できません: ' + 
+                 Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ' > ' + maxEndTime + ':00');
+        return null;
+    }
+    
+    writeLog('DEBUG', '優先時間枠計算完了: ' + 
+             Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+             Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
+    
+    return {
+        start: proposedStart,
+        end: proposedEnd
+    };
+}
+
+/**
+ * 提案された時間枠が利用可能かチェック（会議室込み）
+ * @param {Date} proposedStart - 提案開始時間
+ * @param {Date} proposedEnd - 提案終了時間
+ * @param {Object} trainingGroup - 研修グループ
+ * @returns {boolean} 利用可能かどうか
+ */
+function isProposedTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup) {
+    writeLog('DEBUG', '提案時間枠チェック: ' + trainingGroup.name + ' (' + 
+             Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+             Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + ')');
+    
+    // 1. 参加者の時間重複チェック
+    if (!isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup)) {
+        writeLog('DEBUG', '参加者の時間重複により利用不可');
+        return false;
+    }
+    
+    // 2. 会議室の要否をチェック
+    if (trainingGroup.needsRoom) {
+        if (!isAnyRoomAvailable(trainingGroup.attendees.length, proposedStart, proposedEnd)) {
+            writeLog('DEBUG', '利用可能な会議室がないため利用不可');
+            return false;
+        }
+    }
+    
+    writeLog('DEBUG', '提案時間枠利用可能');
+    return true;
+}
+
+/**
+ * 代替時間枠を検索する（従来ロジック）
+ * @param {Object} trainingGroup - 研修グループ
+ * @param {Date} hireDate - 入社日
+ * @param {number} durationMinutes - 研修時間（分）
+ * @param {Date} targetDate - 対象日
+ * @returns {Object|null} {start: Date, end: Date} または null
+ */
+function findAlternativeTimeSlot(trainingGroup, hireDate, durationMinutes, targetDate) {
+    writeLog('DEBUG', '代替時間枠検索開始: ' + trainingGroup.name);
     
     // 指定日またはその近辺で時間枠を検索（最大30日先まで）
     var searchStartDate = new Date(targetDate);
@@ -626,11 +970,7 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
                     }
                     
                     // 昼休み時間帯（12:00-13:00）との重複チェック
-                    var lunchStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), 12, 0);
-                    var lunchEnd = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), 13, 0);
-                    
-                    // 提案時間と昼休み時間の重複チェック（開始時間 < 昼休み終了時間 AND 終了時間 > 昼休み開始時間）
-                    if (proposedStart < lunchEnd && proposedEnd > lunchStart) {
+                    if (isLunchTimeOverlap(proposedStart, proposedEnd)) {
                         writeLog('DEBUG', '昼休み時間帯（12:00-13:00）と重複するためスキップ: ' + 
                                  Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'HH:mm') + '-' + 
                                  Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm'));
@@ -649,7 +989,7 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
                         }
 
                         // この時間枠は利用可能
-                        writeLog('INFO', '適切な時間枠発見: ' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
+                        writeLog('INFO', '代替時間枠発見: ' + Utilities.formatDate(proposedStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
                                  '-' + Utilities.formatDate(proposedEnd, 'Asia/Tokyo', 'HH:mm') + 
                                  ' (実施日' + (trainingGroup.implementationDay || '未指定') + '営業日目)');
                         return {
@@ -665,7 +1005,7 @@ function findAvailableTimeSlot(trainingGroup, hireDate) {
         currentDate.setDate(currentDate.getDate() + 1);
     }
     
-    writeLog('WARN', '適切な時間枠が見つかりませんでした: ' + trainingGroup.name + ' (実施日: ' + (trainingGroup.implementationDay || '未指定') + '営業日目)');
+    writeLog('WARN', '代替時間枠が見つかりませんでした: ' + trainingGroup.name + ' (実施日: ' + (trainingGroup.implementationDay || '未指定') + '営業日目)');
     return null;
 }
 
@@ -691,6 +1031,62 @@ function calculateImplementationDate(hireDate, businessDays) {
     }
     
     return currentDate;
+}
+
+/**
+ * 指定された時間帯が昼休み時間（12:00-13:00）と重複するかチェック
+ * @param {Date} startTime - 開始時間
+ * @param {Date} endTime - 終了時間
+ * @returns {boolean} 昼休みと重複する場合true
+ */
+function isLunchTimeOverlap(startTime, endTime) {
+    var lunchStart = new Date(startTime.getFullYear(), startTime.getMonth(), startTime.getDate(), 12, 0);
+    var lunchEnd = new Date(startTime.getFullYear(), startTime.getMonth(), startTime.getDate(), 13, 0);
+    
+    // 重複チェック: 開始時間 < 昼休み終了時間 AND 終了時間 > 昼休み開始時間
+    return (startTime < lunchEnd && endTime > lunchStart);
+}
+
+/**
+ * 研修グループの信頼性の高いユニークキーを生成
+ * @param {Object} trainingGroup - 研修グループオブジェクト
+ * @returns {string} ユニークキー
+ */
+function generateEventUniqueKey(trainingGroup) {
+    if (!trainingGroup || !trainingGroup.name) {
+        return 'invalid_' + Math.random().toString(36).substring(2, 15);
+    }
+    
+    // 基本要素
+    var keyComponents = [
+        trainingGroup.name.trim(),
+        trainingGroup.implementationDay || 0,
+        trainingGroup.sequence || 0
+    ];
+    
+    // 講師情報（複数講師対応）
+    var lecturerKey = '';
+    if (trainingGroup.lecturerEmails && trainingGroup.lecturerEmails.length > 0) {
+        lecturerKey = trainingGroup.lecturerEmails.sort().join(',');
+    } else if (trainingGroup.lecturer) {
+        lecturerKey = trainingGroup.lecturer;
+    }
+    keyComponents.push(lecturerKey);
+    
+    // 参加者情報（ソートして一意性を保証）
+    if (trainingGroup.attendees && trainingGroup.attendees.length > 0) {
+        var sortedAttendees = trainingGroup.attendees.slice().sort().join(',');
+        keyComponents.push(sortedAttendees);
+    }
+    
+    var uniqueKey = keyComponents.join('_');
+    
+    // 長すぎる場合はハッシュ化（簡易版）
+    if (uniqueKey.length > 200) {
+        uniqueKey = 'hash_' + Utilities.base64Encode(uniqueKey).substring(0, 50);
+    }
+    
+    return uniqueKey;
 }
 
 /**
@@ -724,69 +1120,91 @@ function isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup) {
         }
     }
     
-    // 2. 講師のGoogleカレンダーとの重複チェック (元のロジックを維持)
-    try {
-        if (lecturerEmail && lecturerEmail.trim() !== '') {
-            writeLog('DEBUG', '講師カレンダーチェック開始: ' + lecturerEmail);
-            
-            // 講師のカレンダーイベントを取得
-            var lecturerCalendar = CalendarApp.getCalendarById(lecturerEmail);
-            if (lecturerCalendar) {
-                var existingEvents = lecturerCalendar.getEvents(proposedStart, proposedEnd);
-                if (existingEvents.length > 0) {
-                    writeLog('DEBUG', '講師の既存予定候補: ' + lecturerEmail + ' (' + existingEvents.length + '件の予定)');
-                    
-                    // 実際に時間重複している予定のみをチェック
-                    var conflictingEvents = [];
-                    for (var i = 0; i < existingEvents.length; i++) {
-                        var event = existingEvents[i];
-                        var eventStart = event.getStartTime();
-                        var eventEnd = event.getEndTime();
-                        
-                        // 終日イベント（00:00-00:00や日付のみ）をスキップ
-                        var eventDuration = eventEnd.getTime() - eventStart.getTime();
-                        var isAllDayEvent = event.isAllDayEvent() || 
-                                          (eventStart.getHours() === 0 && eventStart.getMinutes() === 0 &&
-                                           eventEnd.getHours() === 0 && eventEnd.getMinutes() === 0) ||
-                                          eventDuration >= 24 * 60 * 60 * 1000; // 24時間以上
-                        
-                        if (isAllDayEvent) {
-                            writeLog('DEBUG', '終日イベントのためスキップ: ' + event.getTitle() + ' (' + 
-                                     Utilities.formatDate(eventStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
-                                     '-' + Utilities.formatDate(eventEnd, 'Asia/Tokyo', 'HH:mm') + ')');
-                            continue;
-                        }
-                        
-                        // 実際の時間重複チェック
-                        if (!(proposedEnd <= eventStart || proposedStart >= eventEnd)) {
-                            conflictingEvents.push(event);
-                            writeLog('DEBUG', '時間重複予定: ' + event.getTitle() + ' (' + 
-                                     Utilities.formatDate(eventStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
-                                     '-' + Utilities.formatDate(eventEnd, 'Asia/Tokyo', 'HH:mm') + ')');
-                        } else {
-                            writeLog('DEBUG', '時間重複なし: ' + event.getTitle() + ' (' + 
-                                     Utilities.formatDate(eventStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
-                                     '-' + Utilities.formatDate(eventEnd, 'Asia/Tokyo', 'HH:mm') + ')');
-                        }
-                    }
-                    
-                    if (conflictingEvents.length > 0) {
-                        writeLog('DEBUG', '講師の実際の重複予定: ' + conflictingEvents.length + '件');
-                        return false;
-                    } else {
-                        writeLog('DEBUG', '講師カレンダー重複なし（終日イベント等は除外）');
-                    }
-                }
-            } else {
-                writeLog('WARN', '講師のカレンダーにアクセスできません: ' + lecturerEmail);
-            }
+    // 2. 講師のGoogleカレンダーとの重複チェック (改善版)
+    if (lecturerEmail && lecturerEmail.trim() !== '') {
+        if (!isLecturerAvailable(lecturerEmail, proposedStart, proposedEnd)) {
+            writeLog('DEBUG', '講師の予定と重複により利用不可: ' + lecturerEmail);
+            return false;
         }
-    } catch (e) {
-        writeLog('WARN', '講師カレンダーチェックでエラー: ' + e.message + ' (講師: ' + lecturerEmail + ')');
-        // エラーの場合は重複していないとみなす（厳格すぎるより寛容に）
     }
     
     return true;
+}
+
+/**
+ * 講師が指定時間に空いているかチェック（終日イベント除外対応）
+ * @param {string} lecturerEmail - 講師のメールアドレス
+ * @param {Date} proposedStart - 提案開始時間
+ * @param {Date} proposedEnd - 提案終了時間
+ * @returns {boolean} 講師が空いている場合true
+ */
+function isLecturerAvailable(lecturerEmail, proposedStart, proposedEnd) {
+    try {
+        writeLog('DEBUG', '講師カレンダーチェック開始: ' + lecturerEmail);
+        
+        var lecturerCalendar = CalendarApp.getCalendarById(lecturerEmail);
+        if (!lecturerCalendar) {
+            writeLog('WARN', '講師のカレンダーにアクセスできません: ' + lecturerEmail);
+            return true; // アクセスできない場合は空いているとみなす
+        }
+        
+        var existingEvents = lecturerCalendar.getEvents(proposedStart, proposedEnd);
+        if (existingEvents.length === 0) {
+            writeLog('DEBUG', '講師カレンダーに予定なし');
+            return true;
+        }
+        
+        writeLog('DEBUG', '講師の既存予定候補: ' + existingEvents.length + '件');
+        
+        // 実際に時間重複している予定のみをチェック
+        for (var i = 0; i < existingEvents.length; i++) {
+            var event = existingEvents[i];
+            var eventStart = event.getStartTime();
+            var eventEnd = event.getEndTime();
+            
+            // 終日イベントを除外
+            if (isAllDayEvent(event)) {
+                writeLog('DEBUG', '終日イベントのためスキップ: ' + event.getTitle());
+                continue;
+            }
+            
+            // 実際の時間重複チェック
+            if (!(proposedEnd <= eventStart || proposedStart >= eventEnd)) {
+                writeLog('DEBUG', '講師予定と時間重複: ' + event.getTitle() + ' (' + 
+                         Utilities.formatDate(eventStart, 'Asia/Tokyo', 'MM/dd HH:mm') + 
+                         '-' + Utilities.formatDate(eventEnd, 'Asia/Tokyo', 'HH:mm') + ')');
+                return false;
+            }
+        }
+        
+        writeLog('DEBUG', '講師カレンダー重複なし');
+        return true;
+        
+    } catch (e) {
+        writeLog('WARN', '講師カレンダーチェックでエラー: ' + e.message + ' (講師: ' + lecturerEmail + ')');
+        // エラーの場合は空いているとみなす（厳格すぎるより寛容に）
+        return true;
+    }
+}
+
+/**
+ * イベントが終日イベントかどうかを判定
+ * @param {GoogleAppsScript.Calendar.CalendarEvent} event - カレンダーイベント
+ * @returns {boolean} 終日イベントの場合true
+ */
+function isAllDayEvent(event) {
+    if (event.isAllDayEvent()) {
+        return true;
+    }
+    
+    var eventStart = event.getStartTime();
+    var eventEnd = event.getEndTime();
+    var eventDuration = eventEnd.getTime() - eventStart.getTime();
+    
+    // 24時間以上のイベントまたは00:00-00:00のイベントを終日イベントとみなす
+    return (eventDuration >= 24 * 60 * 60 * 1000) ||
+           (eventStart.getHours() === 0 && eventStart.getMinutes() === 0 &&
+            eventEnd.getHours() === 0 && eventEnd.getMinutes() === 0);
 }
 
 /**
@@ -796,8 +1214,9 @@ function isTimeSlotAvailable(proposedStart, proposedEnd, trainingGroup) {
  * @param {Date} startTime - 開始時間
  * @param {Date} endTime - 終了時間
  */
-function createSingleCalendarEvent(trainingDetails, roomName, startTime, endTime) {
+function createSingleCalendarEvent(trainingDetails, roomReservation, startTime, endTime) {
     var title = trainingDetails.name;
+    var roomName = roomReservation ? roomReservation.roomName : 'オンライン';
     
     writeLog('INFO', '研修 "' + title + '" を ' + Utilities.formatDate(startTime, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') + 
              ' から ' + Utilities.formatDate(endTime, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') + ' で作成');
@@ -815,23 +1234,12 @@ function createSingleCalendarEvent(trainingDetails, roomName, startTime, endTime
     
     // 会議室リソースがある場合は参加者に追加
     var roomResourceEmail = null;
-    if (roomName && roomName !== 'オンライン' && roomName !== '会議室未確保' && roomName !== '実施不要') {
-        // スケジュールされた会議室情報から対応するカレンダーIDを取得
-        for (var i = 0; i < scheduledRooms.length; i++) {
-            var scheduledRoom = scheduledRooms[i];
-            if (scheduledRoom.roomName && scheduledRoom.roomName === roomName) {
-                if (scheduledRoom.calendarId) {
-                    roomResourceEmail = scheduledRoom.calendarId;
-                    validEmails.push(roomResourceEmail);
-                    writeLog('INFO', '会議室カレンダーIDを参加者に追加: ' + roomResourceEmail);
-                    break;
-                } else if (scheduledRoom.resourceEmail) {
-                    roomResourceEmail = scheduledRoom.resourceEmail;
-                    validEmails.push(roomResourceEmail);
-                    writeLog('INFO', '会議室リソースを参加者に追加: ' + roomResourceEmail);
-                    break;
-                }
-            }
+    if (roomReservation && roomName && roomName !== 'オンライン' && roomName !== '会議室未確保' && roomName !== '実施不要') {
+        // roomReservationから直接カレンダーIDを取得
+        if (roomReservation.calendarId) {
+            roomResourceEmail = roomReservation.calendarId;
+            validEmails.push(roomResourceEmail);
+            writeLog('INFO', '会議室カレンダーIDを参加者に追加: ' + roomResourceEmail);
         }
         
         // スケジュールされた会議室情報にない場合は、会議室マスタから検索
@@ -863,16 +1271,22 @@ function createSingleCalendarEvent(trainingDetails, roomName, startTime, endTime
     
     // location文字列を決定
     var locationString = roomName || '';
-    // 会議室リソースがカレンダーに追加されている場合、locationはリソースで表現されるため、テキストのlocationは空にする
     if (roomResourceEmail) {
-        locationString = '';
+        locationString = ''; // 会議室リソースが設定されていれば、locationは自動的に設定される
     }
+
+    var description = trainingDetails.memo || '';
     
     var options = {
-        description: trainingDetails.memo,
+        description: description,
         guests: validEmails.join(','),
         location: locationString,
     };
+
+    // ハイブリッド開催の場合、Google Meetのリンクを生成
+    if (roomReservation && (roomReservation.isHybrid || roomName === 'オンライン')) {
+        options.conferenceDataVersion = 1;
+    }
     
     try {
         var calendarEvent = CalendarApp.createEvent(title, startTime, endTime, options);
@@ -888,6 +1302,547 @@ function createSingleCalendarEvent(trainingDetails, roomName, startTime, endTime
         writeLog('ERROR', '参加者リスト: ' + validEmails.join(', '));
         throw e;
     }
+}
+
+/**
+ * 研修グループをインクリメンタルに処理してマッピングシートを更新する
+ * @param {Array<Object>} trainingGroups - 研修グループの配列
+ * @param {Array<Object>} allNewHires - 全入社者の配列
+ * @param {Date} hireDate - 入社日
+ * @param {Object} mappingSheet - 更新対象のマッピングシート
+ */
+function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDate, mappingSheet) {
+    writeLog('INFO', 'インクリメンタル処理開始: ' + trainingGroups.length + '件の研修を処理');
+    
+    // スケジュール管理用配列をリセット
+    scheduledEvents = [];
+    
+    // 会議室予約管理システムをリセット
+    var roomManager = RoomReservationManager.getInstance();
+    roomManager.reset();
+    
+    var successCount = 0;
+    var errorCount = 0;
+    
+    for (var i = 0; i < trainingGroups.length; i++) {
+        var group = trainingGroups[i];
+        var rowIndex = i + 2; // スプレッドシートの行番号（ヘッダー行の次から）
+        
+        writeLog('INFO', '処理中 (' + (i + 1) + '/' + trainingGroups.length + '): ' + group.name);
+        
+        try {
+            // 処理状況を「処理中」に更新
+            updateMappingSheetRow(mappingSheet, rowIndex, {
+                status: '処理中...',
+                roomName: '確保中...',
+                schedule: '計算中...'
+            });
+            
+            // 参加者数チェック
+            var participantCount = 0;
+            if (group.attendees && group.attendees.length > 0) {
+                for (var k = 0; k < group.attendees.length; k++) {
+                    if (group.attendees[k] !== group.lecturer) {
+                        participantCount++;
+                    }
+                }
+            }
+            
+            if (participantCount === 0) {
+                writeLog('INFO', '参加者が0人のため研修をスキップ: ' + group.name);
+                updateMappingSheetRow(mappingSheet, rowIndex, {
+                    status: 'スキップ（参加者0名）',
+                    roomName: '実施不要',
+                    schedule: 'N/A'
+                });
+                continue;
+            }
+            
+            // 時間枠を確保
+            var eventTime = findAvailableTimeSlot(group, hireDate);
+            if (!eventTime) {
+                writeLog('ERROR', '時間枠確保失敗: ' + group.name);
+                updateMappingSheetRow(mappingSheet, rowIndex, {
+                    status: '失敗（時間枠未確保）',
+                    roomName: group.needsRoom ? '会議室未確保' : 'オンライン',
+                    schedule: '時間枠未確保'
+                });
+                errorCount++;
+                continue;
+            }
+            
+            // 会議室確保
+            var roomName = null;
+            var roomReservation = null;
+            if (group.needsRoom) {
+                try {
+                    var lecturerCount = group.lecturerEmails ? group.lecturerEmails.length : 1;
+                    var totalAttendeeCount = participantCount + lecturerCount;
+                    roomReservation = findAndReserveRoom(totalAttendeeCount, eventTime.start, eventTime.end, group.name);
+                    roomName = roomReservation.roomName;
+                    writeLog('INFO', '会議室確保成功: ' + roomName);
+                } catch (e) {
+                    writeLog('ERROR', '会議室確保失敗: ' + e.message);
+                    roomName = '会議室未確保';
+                }
+            } else {
+                roomName = 'オンライン';
+            }
+            
+            // カレンダーイベント作成
+            createSingleCalendarEvent(group, roomReservation, eventTime.start, eventTime.end);
+            
+            // 成功時の更新
+            var scheduleStr = Utilities.formatDate(eventTime.start, 'Asia/Tokyo', 'MM/dd(E) HH:mm') + 
+                            '-' + Utilities.formatDate(eventTime.end, 'Asia/Tokyo', 'HH:mm');
+            
+            updateMappingSheetRow(mappingSheet, rowIndex, {
+                status: '成功',
+                roomName: roomName,
+                schedule: scheduleStr,
+                calendarId: group.calendarEventId || ''
+            });
+            
+            successCount++;
+            writeLog('INFO', '研修処理成功: ' + group.name + ' (ID: ' + group.calendarEventId + ')');
+            
+        } catch (e) {
+            writeLog('ERROR', '研修処理失敗: ' + group.name + ' - ' + e.message);
+            updateMappingSheetRow(mappingSheet, rowIndex, {
+                status: '失敗: ' + e.message,
+                roomName: group.needsRoom ? '会議室未確保' : 'オンライン',
+                schedule: 'エラー'
+            });
+            errorCount++;
+        }
+        
+        // 少し待機（API制限対策）
+        if (i < trainingGroups.length - 1) {
+            Utilities.sleep(1000); // 1秒待機
+        }
+    }
+    
+    // 最終サマリーをシートに追加（拡張検証付き）
+    addProcessingSummary(mappingSheet, trainingGroups.length, successCount, errorCount, allNewHires, trainingGroups);
+    
+    writeLog('INFO', 'インクリメンタル処理完了: 成功=' + successCount + ', 失敗=' + errorCount + ', 総数=' + trainingGroups.length);
+}
+
+/**
+ * マッピングシートの特定行を更新する
+ * @param {Object} mappingSheet - 更新対象のシート
+ * @param {number} rowIndex - 行番号
+ * @param {Object} updates - 更新内容 {status, roomName, schedule, calendarId}
+ */
+function updateMappingSheetRow(mappingSheet, rowIndex, updates) {
+    try {
+        if (updates.roomName !== undefined) {
+            mappingSheet.getRange(rowIndex, 6).setValue(updates.roomName); // F列: 会議室名
+        }
+        if (updates.schedule !== undefined) {
+            mappingSheet.getRange(rowIndex, 7).setValue(updates.schedule); // G列: 研修実施日時
+        }
+        if (updates.calendarId !== undefined) {
+            mappingSheet.getRange(rowIndex, 8).setValue(updates.calendarId); // H列: カレンダーID
+        }
+        if (updates.status !== undefined) {
+            var statusCell = mappingSheet.getRange(rowIndex, 9); // I列: 処理状況
+            statusCell.setValue(updates.status);
+            
+            // 処理状況に応じた背景色設定
+            if (updates.status === '成功') {
+                statusCell.setBackground('#d4edda').setFontColor('#155724');
+            } else if (updates.status.indexOf('失敗') !== -1 || updates.status.indexOf('エラー') !== -1) {
+                statusCell.setBackground('#f8d7da').setFontColor('#721c24');
+            } else if (updates.status.indexOf('処理中') !== -1) {
+                statusCell.setBackground('#fff3cd').setFontColor('#856404');
+            } else if (updates.status.indexOf('スキップ') !== -1) {
+                statusCell.setBackground('#e2e3e5').setFontColor('#383d41');
+            }
+        }
+        
+        // 表示を強制的に更新
+        SpreadsheetApp.flush();
+        
+    } catch (e) {
+        writeLog('ERROR', 'マッピングシート行更新でエラー: ' + e.message + ' (行: ' + rowIndex + ')');
+    }
+}
+
+/**
+ * 処理サマリーをシートに追加する（拡張版）
+ * @param {Object} mappingSheet - 対象シート
+ * @param {number} totalCount - 総数
+ * @param {number} successCount - 成功数
+ * @param {number} errorCount - エラー数
+ * @param {Array<Object>} newHires - 入社者データ（検証用）
+ * @param {Array<Object>} trainingGroups - 研修グループデータ（検証用）
+ */
+function addProcessingSummary(mappingSheet, totalCount, successCount, errorCount, newHires, trainingGroups) {
+    var lastRow = mappingSheet.getLastRow();
+    var summaryStartRow = lastRow + 2;
+    
+    // 基本サマリー
+    mappingSheet.getRange(summaryStartRow, 1).setValue('【処理サマリー】');
+    mappingSheet.getRange(summaryStartRow + 1, 1).setValue('総研修数:');
+    mappingSheet.getRange(summaryStartRow + 1, 2).setValue(totalCount);
+    mappingSheet.getRange(summaryStartRow + 2, 1).setValue('成功:');
+    mappingSheet.getRange(summaryStartRow + 2, 2).setValue(successCount);
+    mappingSheet.getRange(summaryStartRow + 3, 1).setValue('失敗:');
+    mappingSheet.getRange(summaryStartRow + 3, 2).setValue(errorCount);
+    mappingSheet.getRange(summaryStartRow + 4, 1).setValue('処理完了日時:');
+    mappingSheet.getRange(summaryStartRow + 4, 2).setValue(new Date());
+    
+    // 基本サマリーのスタイル設定
+    var basicSummaryRange = mappingSheet.getRange(summaryStartRow, 1, 5, 2);
+    basicSummaryRange.setBackground('#f0f0f0');
+    basicSummaryRange.setFontWeight('bold');
+    
+    // 拡張検証セクション
+    var currentRow = summaryStartRow + 6;
+    
+    // 職位別研修数検証
+    if (newHires && trainingGroups) {
+        try {
+            writeLog('INFO', '拡張検証レポート作成開始');
+            
+            // 職位別研修数検証
+            var validationResults = validateTrainingCountByPosition(newHires, trainingGroups);
+            
+            mappingSheet.getRange(currentRow, 1).setValue('【職位別研修数検証】');
+            currentRow++;
+            
+            var overallIcon = validationResults.overall ? '✅' : '❌';
+            var overallStatus = validationResults.overall ? '正常' : '異常';
+            mappingSheet.getRange(currentRow, 1).setValue('全体検証結果:');
+            mappingSheet.getRange(currentRow, 2).setValue(overallIcon + ' ' + overallStatus);
+            
+            // 検証結果に応じて背景色を設定
+            var statusCell = mappingSheet.getRange(currentRow, 2);
+            if (validationResults.overall) {
+                statusCell.setBackground('#d4edda').setFontColor('#155724');
+            } else {
+                statusCell.setBackground('#f8d7da').setFontColor('#721c24');
+            }
+            currentRow++;
+            
+            // 個人別詳細
+            if (validationResults.details && validationResults.details.length > 0) {
+                for (var i = 0; i < validationResults.details.length; i++) {
+                    var detail = validationResults.details[i];
+                    var icon = detail.isValid ? '✅' : '❌';
+                    var detailText = detail.name + '(' + detail.rank + '/' + detail.experience + '): 期待数' + detail.expected + ' → 実際数' + detail.actual + ' ' + icon;
+                    
+                    mappingSheet.getRange(currentRow, 1).setValue('- ' + detail.name + ':');
+                    mappingSheet.getRange(currentRow, 2).setValue('期待数' + detail.expected + ' → 実際数' + detail.actual + ' ' + icon);
+                    
+                    // 個別結果の背景色設定
+                    var detailCell = mappingSheet.getRange(currentRow, 2);
+                    if (detail.isValid) {
+                        detailCell.setBackground('#e8f5e8');
+                    } else {
+                        detailCell.setBackground('#ffeaea');
+                    }
+                    currentRow++;
+                }
+            }
+            
+            currentRow++; // 空行
+            
+            // カレンダー重複チェック
+            var conflictResults = validateCalendarTimeSlots(trainingGroups);
+            
+            mappingSheet.getRange(currentRow, 1).setValue('【カレンダー重複チェック】');
+            currentRow++;
+            
+            var conflictIcon = conflictResults.hasConflicts ? '❌' : '✅';
+            var conflictStatus = conflictResults.hasConflicts ? 'あり' : 'なし';
+            mappingSheet.getRange(currentRow, 1).setValue('時間重複:');
+            mappingSheet.getRange(currentRow, 2).setValue(conflictIcon + ' ' + conflictStatus);
+            
+            // 重複結果に応じて背景色を設定
+            var conflictCell = mappingSheet.getRange(currentRow, 2);
+            if (!conflictResults.hasConflicts) {
+                conflictCell.setBackground('#d4edda').setFontColor('#155724');
+            } else {
+                conflictCell.setBackground('#f8d7da').setFontColor('#721c24');
+            }
+            currentRow++;
+            
+            // チェック対象数
+            mappingSheet.getRange(currentRow, 1).setValue('チェック対象イベント数:');
+            mappingSheet.getRange(currentRow, 2).setValue(conflictResults.checkedEvents + '/' + conflictResults.totalEvents);
+            currentRow++;
+            
+            // 重複詳細
+            if (conflictResults.conflicts && conflictResults.conflicts.length > 0) {
+                mappingSheet.getRange(currentRow, 1).setValue('重複詳細:');
+                currentRow++;
+                
+                for (var j = 0; j < Math.min(5, conflictResults.conflicts.length); j++) { // 最大5件まで表示
+                    var conflict = conflictResults.conflicts[j];
+                    mappingSheet.getRange(currentRow, 1).setValue('- ' + conflict.event1 + ' vs ' + conflict.event2);
+                    mappingSheet.getRange(currentRow, 2).setValue(conflict.time1 + ' / ' + conflict.time2);
+                    mappingSheet.getRange(currentRow, 2).setBackground('#ffeaea');
+                    currentRow++;
+                }
+                
+                if (conflictResults.conflicts.length > 5) {
+                    mappingSheet.getRange(currentRow, 1).setValue('... 他' + (conflictResults.conflicts.length - 5) + '件');
+                    currentRow++;
+                }
+            }
+            
+            // 拡張検証セクションのスタイル設定
+            var validationHeaderRange = mappingSheet.getRange(summaryStartRow + 6, 1, currentRow - summaryStartRow - 6, 2);
+            validationHeaderRange.setFontWeight('normal');
+            
+            // ヘッダー行を太字に
+            mappingSheet.getRange(summaryStartRow + 6, 1).setFontWeight('bold'); // 【職位別研修数検証】
+            if (currentRow > summaryStartRow + 8) {
+                // 【カレンダー重複チェック】の行を探して太字に
+                for (var row = summaryStartRow + 7; row < currentRow; row++) {
+                    var cellValue = mappingSheet.getRange(row, 1).getValue();
+                    if (cellValue && cellValue.toString().indexOf('【カレンダー重複チェック】') !== -1) {
+                        mappingSheet.getRange(row, 1).setFontWeight('bold');
+                        break;
+                    }
+                }
+            }
+            
+            writeLog('INFO', '拡張検証レポート作成完了');
+            
+        } catch (e) {
+            writeLog('ERROR', '拡張検証レポート作成でエラー: ' + e.message);
+            
+            // エラー時のフォールバック表示
+            mappingSheet.getRange(currentRow, 1).setValue('【拡張検証】');
+            currentRow++;
+            mappingSheet.getRange(currentRow, 1).setValue('検証エラー:');
+            mappingSheet.getRange(currentRow, 2).setValue(e.message);
+            mappingSheet.getRange(currentRow, 2).setBackground('#f8d7da').setFontColor('#721c24');
+        }
+    }
+}
+
+// =========================================
+// 拡張検証機能
+// =========================================
+
+/**
+ * 職位別研修数を検証する
+ * @param {Array<Object>} newHires - 入社者データ
+ * @param {Array<Object>} trainingGroups - 研修グループデータ
+ * @returns {Object} 検証結果
+ */
+function validateTrainingCountByPosition(newHires, trainingGroups) {
+    writeLog('INFO', '=== 職位別研修数検証開始 ===');
+    
+    var validationResults = {
+        overall: true,
+        details: [],
+        expectedCounts: {},
+        actualCounts: {}
+    };
+    
+    try {
+        // 研修マスタから期待研修数を計算
+        var expectedCounts = calculateExpectedTrainingCounts();
+        validationResults.expectedCounts = expectedCounts;
+        
+        // 各入社者について検証
+        for (var i = 0; i < newHires.length; i++) {
+            var hire = newHires[i];
+            var pattern = determineTrainingPattern(hire.rank, hire.experience);
+            
+            if (!pattern) {
+                writeLog('WARN', '研修パターンが決定できません: ' + hire.name + ' (職位: ' + hire.rank + ', 経験: ' + hire.experience + ', 所属: ' + hire.department + ')');
+                continue;
+            }
+            
+            // この入社者が参加する研修数をカウント
+            var actualCount = 0;
+            for (var j = 0; j < trainingGroups.length; j++) {
+                var group = trainingGroups[j];
+                if (group.attendees && group.attendees.indexOf(hire.email) !== -1) {
+                    actualCount++;
+                }
+            }
+            
+            var expectedCount = expectedCounts[pattern] || 0;
+            var isValid = (actualCount === expectedCount);
+            
+            if (!isValid) {
+                validationResults.overall = false;
+            }
+            
+            validationResults.details.push({
+                name: hire.name,
+                rank: hire.rank,
+                experience: hire.experience,
+                pattern: pattern,
+                expected: expectedCount,
+                actual: actualCount,
+                isValid: isValid
+            });
+            
+            writeLog('INFO', '検証結果: ' + hire.name + ' (' + hire.rank + '/' + hire.experience + '/' + hire.department + ', パターン' + pattern + ') - 期待数: ' + expectedCount + ', 実際数: ' + actualCount + ', 判定: ' + (isValid ? '✅' : '❌'));
+        }
+        
+        writeLog('INFO', '職位別研修数検証完了: 全体判定=' + (validationResults.overall ? '正常' : '異常'));
+        
+    } catch (e) {
+        writeLog('ERROR', '職位別研修数検証でエラー: ' + e.message);
+        validationResults.overall = false;
+        validationResults.error = e.message;
+    }
+    
+    return validationResults;
+}
+
+/**
+ * 研修マスタから各パターンの期待研修数を計算する
+ * @returns {Object} パターン別期待研修数
+ */
+function calculateExpectedTrainingCounts() {
+    writeLog('DEBUG', '期待研修数計算開始');
+    
+    var expectedCounts = {
+        'A': 0, // 未経験者向け
+        'B': 0, // 経験C/SC向け
+        'C': 0, // M向け
+        'D': 0  // SMup向け
+    };
+    
+    try {
+        var masterSheet = SpreadsheetApp.openById(SPREADSHEET_IDS.TRAINING_MASTER).getSheetByName(SHEET_NAMES.TRAINING_MASTER);
+        var lastRow = masterSheet.getLastRow();
+        
+        if (lastRow <= 4) {
+            writeLog('WARN', '研修マスタにデータがありません');
+            return expectedCounts;
+        }
+        
+        var lastCol = masterSheet.getLastColumn();
+        var maxCol = Math.min(lastCol, 21);
+        var masterData = masterSheet.getRange(5, 1, lastRow - 4, maxCol).getValues();
+        
+        for (var i = 0; i < masterData.length; i++) {
+            var row = masterData[i];
+            
+            var lv1 = row[0];           // A列: Lv.1
+            var trainingName = row[2];  // C列: 研修名称
+            var patternA = row[3];      // D列: Aパターン
+            var patternB = row[4];      // E列: Bパターン
+            var patternC = row[5];      // F列: Cパターン
+            var patternD = row[6];      // G列: Dパターン
+            
+            // 対象外フィルタリング
+            if (!trainingName || trainingName.trim() === '') continue;
+            if (lv1 !== 'DX ONB' && lv1 !== 'ビジネススキル研修') continue;
+            
+            // 各パターンでカウント
+            if (patternA === '●') expectedCounts['A']++;
+            if (patternB === '●') expectedCounts['B']++;
+            if (patternC === '●') expectedCounts['C']++;
+            if (patternD === '●') expectedCounts['D']++;
+        }
+        
+        writeLog('DEBUG', '期待研修数: A=' + expectedCounts['A'] + ', B=' + expectedCounts['B'] + ', C=' + expectedCounts['C'] + ', D=' + expectedCounts['D']);
+        
+    } catch (e) {
+        writeLog('ERROR', '期待研修数計算でエラー: ' + e.message);
+    }
+    
+    return expectedCounts;
+}
+
+/**
+ * カレンダー時間枠の重複をチェックする
+ * @param {Array<Object>} trainingGroups - 研修グループデータ
+ * @returns {Object} 重複チェック結果
+ */
+function validateCalendarTimeSlots(trainingGroups) {
+    writeLog('INFO', '=== カレンダー時間枠重複チェック開始 ===');
+    
+    var conflictResults = {
+        hasConflicts: false,
+        conflicts: [],
+        totalEvents: 0,
+        checkedEvents: 0
+    };
+    
+    try {
+        var scheduledEvents = [];
+        
+        // スケジュールされたイベントを収集
+        for (var i = 0; i < trainingGroups.length; i++) {
+            var group = trainingGroups[i];
+            if (group.calendarEventId) {
+                try {
+                    var event = CalendarApp.getEventById(group.calendarEventId);
+                    if (event) {
+                        scheduledEvents.push({
+                            name: group.name,
+                            eventId: group.calendarEventId,
+                            startTime: event.getStartTime(),
+                            endTime: event.getEndTime(),
+                            attendees: group.attendees || []
+                        });
+                        conflictResults.checkedEvents++;
+                    }
+                } catch (e) {
+                    writeLog('WARN', 'カレンダーイベント取得失敗: ' + group.name + ' (ID: ' + group.calendarEventId + ') - ' + e.message);
+                }
+            }
+        }
+        
+        conflictResults.totalEvents = scheduledEvents.length;
+        writeLog('DEBUG', 'チェック対象イベント数: ' + conflictResults.totalEvents);
+        
+        // 時間重複チェック
+        for (var i = 0; i < scheduledEvents.length; i++) {
+            for (var j = i + 1; j < scheduledEvents.length; j++) {
+                var event1 = scheduledEvents[i];
+                var event2 = scheduledEvents[j];
+                
+                // 時間重複チェック
+                var timeOverlap = !(event1.endTime <= event2.startTime || event1.startTime >= event2.endTime);
+                
+                if (timeOverlap) {
+                    // 参加者重複チェック
+                    var attendeeOverlap = false;
+                    for (var k = 0; k < event1.attendees.length; k++) {
+                        if (event2.attendees.indexOf(event1.attendees[k]) !== -1) {
+                            attendeeOverlap = true;
+                            break;
+                        }
+                    }
+                    
+                    if (attendeeOverlap) {
+                        conflictResults.hasConflicts = true;
+                        conflictResults.conflicts.push({
+                            event1: event1.name,
+                            event2: event2.name,
+                            time1: Utilities.formatDate(event1.startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + Utilities.formatDate(event1.endTime, 'Asia/Tokyo', 'HH:mm'),
+                            time2: Utilities.formatDate(event2.startTime, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + Utilities.formatDate(event2.endTime, 'Asia/Tokyo', 'HH:mm'),
+                            conflictType: '参加者重複あり'
+                        });
+                        
+                        writeLog('WARN', '時間重複検出: ' + event1.name + ' vs ' + event2.name + ' (参加者重複あり)');
+                    }
+                }
+            }
+        }
+        
+        writeLog('INFO', 'カレンダー時間枠重複チェック完了: 重複=' + (conflictResults.hasConflicts ? 'あり(' + conflictResults.conflicts.length + '件)' : 'なし'));
+        
+    } catch (e) {
+        writeLog('ERROR', 'カレンダー時間枠重複チェックでエラー: ' + e.message);
+        conflictResults.error = e.message;
+    }
+    
+    return conflictResults;
 }
 
 /**

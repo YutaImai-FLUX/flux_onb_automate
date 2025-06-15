@@ -8,18 +8,26 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('研修自動化')
-    .addItem('カレンダー招待を実行', 'executeONBAutomation')
+    .addItem('📋 実行ログを表示', 'showExecutionLogs')
+    .addSeparator()
+    .addItem('カレンダー招待を実行（従来版）', 'executeONBAutomation')
     .addSeparator()
     .addItem('全カレンダーイベントを削除', 'deleteAllCalendarEvents')
     .addItem('特定研修のイベントを削除', 'deleteSpecificEvent')
     .addSeparator()
     .addSubMenu(SpreadsheetApp.getUi().createMenu('テスト機能')
+      .addItem('📊 マッピングシート作成デバッグ', 'debugMappingSheet')
+      .addSeparator()
       .addItem('複数講師対応テスト', 'テスト_複数講師対応')
       .addItem('実施順処理テスト', 'テスト_実施順処理')
-      .addItem('入社者データ取得テスト', 'テスト_入社者データ取得'))
+      .addItem('入社者データ取得テスト', 'テスト_入社者データ取得')
+      .addItem('会議室予約管理テスト', 'テスト_会議室予約管理')
+      .addItem('時間枠計算テスト', 'テスト_時間枠計算')
+      .addItem('拡張検証テスト', 'テスト_拡張検証')
+      .addSeparator()
+      .addItem('🔍 カレンダー重複問題検証', 'テスト_カレンダー重複問題検証'))
     .addToUi();
 }
-
 
 // =========================================
 // メイン処理
@@ -174,20 +182,14 @@ function executeONBAutomation() {
                ' (最大実施日: ' + maxImplementationDay + '営業日目)');
     }
 
-    // 3.5. マッピング結果をシートに表示
+    // 3.5. マッピング結果をシートに表示（プログレス付きインクリメンタル処理）
     if (trainingGroups.length > 0) {
-      createMappingSheet(trainingGroups, newHiresData, periodStart, periodEnd);
-    }
-
-    // 4. カレンダーイベントを作成（時間重複を回避）
-    writeLog('INFO', 'カレンダーイベント作成を開始');
-    writeLog('INFO', '入社日基準: ' + executionParams.hireDate);
-    var scheduleResults = createAllCalendarEvents(trainingGroups, executionParams.hireDate);
-
-    // 4.5. マッピング結果をスケジュール結果で更新
-    if (scheduleResults && scheduleResults.length > 0) {
-      writeLog('INFO', 'マッピング結果を更新: ' + scheduleResults.length + '件のスケジュール結果');
-      updateMappingSheetWithScheduleResults(scheduleResults, newHiresData, periodStart, periodEnd);
+      var mappingSheet = createIncrementalMappingSheet(trainingGroups, newHiresData, periodStart, periodEnd);
+      
+      // 4. カレンダーイベントを作成（インクリメンタル処理）
+      writeLog('INFO', 'インクリメンタルカレンダーイベント作成を開始');
+      writeLog('INFO', '入社日基準: ' + executionParams.hireDate);
+      processTrainingGroupsIncrementally(trainingGroups, newHiresData, executionParams.hireDate, mappingSheet);
     }
 
     // 5. 処理ステータスを更新
@@ -313,4 +315,57 @@ function deleteSpecificEvent() {
     writeLog('ERROR', '特定研修カレンダーイベント削除でエラー: ' + e.message + ' (研修名: ' + trainingName + ')');
     ui.alert('エラー', 'カレンダーイベントの削除中にエラーが発生しました:\n' + e.message, ui.ButtonSet.OK);
   }
-} 
+}
+
+/**
+ * マッピングシート作成のデバッグ関数
+ */
+function debugMappingSheet() {
+  try {
+    writeLog('INFO', '=== マッピングシート作成デバッグ開始 ===');
+    
+    var newHires = getNewHires();
+    if (newHires.length === 0) {
+      SpreadsheetApp.getUi().alert('警告', '入社者データがありません。', SpreadsheetApp.getUi().ButtonSet.OK);
+      return;
+    }
+    
+    var trainingGroups = groupTrainingsForHires(newHires);
+    
+    var message = 'マッピングシート作成デバッグ結果:\n\n';
+    message += '入社者数: ' + newHires.length + '名\n';
+    message += '研修グループ数: ' + trainingGroups.length + '件\n\n';
+    
+    message += '入社者詳細:\n';
+    for (var i = 0; i < Math.min(3, newHires.length); i++) {
+      var hire = newHires[i];
+      message += (i + 1) + '. ' + hire.name + ' (' + hire.rank + '/' + hire.experience + '/' + hire.department + ')\n';
+    }
+    if (newHires.length > 3) {
+      message += '... 他' + (newHires.length - 3) + '名\n';
+    }
+    
+    message += '\n研修グループ詳細:\n';
+    for (var i = 0; i < Math.min(3, trainingGroups.length); i++) {
+      var group = trainingGroups[i];
+      message += (i + 1) + '. ' + group.name + ' (参加者: ' + (group.attendees ? group.attendees.length : 0) + '名)\n';
+    }
+    if (trainingGroups.length > 3) {
+      message += '... 他' + (trainingGroups.length - 3) + '件\n';
+    }
+    
+    // 今日の日付を使用してマッピングシート作成
+    var hireDate = new Date();
+    createMappingSheet(trainingGroups, newHires, hireDate, hireDate);
+    
+    message += '\nマッピングシートを作成しました。\n';
+    message += '詳細なログは実行ログシートをご確認ください。';
+    
+    SpreadsheetApp.getUi().alert('デバッグ結果', message, SpreadsheetApp.getUi().ButtonSet.OK);
+    writeLog('INFO', '=== マッピングシート作成デバッグ完了 ===');
+    
+  } catch (e) {
+    writeLog('ERROR', 'マッピングシート作成デバッグでエラー: ' + e.message);
+    SpreadsheetApp.getUi().alert('エラー', 'マッピングシート作成デバッグでエラーが発生しました:\n' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
