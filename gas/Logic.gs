@@ -89,12 +89,16 @@ function validateNewHires(newHires) {
 function groupTrainingsForHires(newHires) {
   var masterSheet = SpreadsheetApp.openById(SPREADSHEET_IDS.TRAINING_MASTER).getSheetByName(SHEET_NAMES.TRAINING_MASTER);
   var lastRow = masterSheet.getLastRow();
-  writeLog('DEBUG', '研修マスタの最終行: ' + lastRow);
+  var lastCol = masterSheet.getLastColumn(); // 列数を先に取得
+  writeLog('DEBUG', '研修マスタの最終行: ' + lastRow + ', 最終列: ' + lastCol);
   
   // 実際のヘッダー構造を確認（デバッグ用）M,P列削除後
-  if (lastRow >= 4) {
-    var actualHeader = masterSheet.getRange(4, 1, 1, Math.min(lastCol, 19)).getValues()[0];
-    writeLog('DEBUG', '4行目ヘッダー（M,P列削除後）: ' + actualHeader.join(' | '));
+  if (lastRow >= 4 && lastCol > 0) {
+    var headerCols = Math.max(1, Math.min(lastCol, 19)); // 最低1列、最大19列
+    var actualHeader = masterSheet.getRange(4, 1, 1, headerCols).getValues()[0];
+    writeLog('DEBUG', '4行目ヘッダー（M,P列削除後、列数:' + headerCols + '）: ' + actualHeader.join(' | '));
+  } else {
+    writeLog('WARN', 'ヘッダー取得スキップ: lastRow=' + lastRow + ', lastCol=' + lastCol);
   }
   
   if (lastRow <= 4) {
@@ -102,11 +106,8 @@ function groupTrainingsForHires(newHires) {
     return [];
   }
   
-  // 実際の列数を確認してから適切な範囲でデータを取得
-  var lastCol = masterSheet.getLastColumn();
-  writeLog('DEBUG', '研修マスタの実際の列数: ' + lastCol);
+  var maxCol = Math.max(1, Math.min(lastCol, 19)); // M,P列削除後は最大19列まで取得（最低1列）
   
-  var maxCol = Math.min(lastCol, 19); // M,P列削除後は最大19列まで取得
   var masterData = masterSheet.getRange(5, 1, lastRow - 4, maxCol).getValues();
   writeLog('DEBUG', '研修マスタの取得データ行数: ' + masterData.length + ', 取得列数: ' + maxCol);
 
