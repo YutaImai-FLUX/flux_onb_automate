@@ -1799,7 +1799,7 @@ function calculateExpectedTrainingCounts() {
         }
         
         var lastCol = masterSheet.getLastColumn();
-        var maxCol = Math.min(lastCol, 21);
+        var maxCol = Math.min(lastCol, 19); // M,P列削除後は最大19列まで取得
         var masterData = masterSheet.getRange(5, 1, lastRow - 4, maxCol).getValues();
         
         for (var i = 0; i < masterData.length; i++) {
