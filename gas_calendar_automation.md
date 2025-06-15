@@ -8,10 +8,12 @@
 - 送付漏れや誤った研修への招待といったヒューマンエラーを防ぎ、新入社員へ確実な研修案内を配信する
 
 ### 1.2 基本機能
-- **役職別研修マッピング**: 「ONB管理表」を参照し、入社者の役職レベルに対応する研修を自動で特定する
-- **自動カレンダー招待送付**: 入社者の役職に応じた研修カレンダーの招待を自動で生成し、送付する
-- **送付状況の自動更新**: 招待送付が完了した対象者について、ステータスを自動で「済」マークに更新する
-- **実行ログ記録**: 自動化処理の実行履歴と結果（成功・失敗）のログを保存する
+- **研修パターンの自動判定**: 「入社者リスト」を参照し、入社者の職位と経験有無から参加すべき研修パターン（未経験者向け、経験者向けなど）を自動で判定する。
+- **研修情報の自動マッピング**: 判定された研修パターンに基づき、「研修管理表マスタ」から対象となる研修を自動で特定する。
+- **講師の空き時間を考慮した自動スケジューリング**: 担当講師のGoogleカレンダーの空き時間を検索し、重複を避けて研修日時を自動で設定する。
+- **自動カレンダー招待送付**: 決定したスケジュールで、参加者（入社者＋講師）と会議室を含めたGoogleカレンダーの招待を自動で生成・送付する。
+- **マッピング結果の可視化**: どの研修に誰が参加するかをまとめた「マッピング結果シート」を自動で生成し、実行結果を可視化する。
+- **実行ログ記録と通知**: 自動化処理の実行履歴、結果（成功・失敗）、エラー詳細をログとして記録し、担当者にメールで通知する。
 
 ## 2. 前提条件と環境設定
 
@@ -25,10 +27,10 @@ Google Workspaceアカウントを準備し、以下のサービスを有効化�
 ### 2.2 スプレッドシート構成
 | シート名 | 使用シート | 列情報 | サンプルリンク |
 |:---|:---|:---|:---|
-| **DXS本部_入社者連携シート** | 入社者リスト | • **A列**: 職位 (必須)<br>• **B列**: 氏名<br>• **D列**: メールアドレス (必須)<br>• **E列**: 処理状況 | [DXS本部_入社者連携シート](https://docs.google.com/spreadsheets/d/1BOfOUnIHotCLatJYKxDNNfndtptlC8NjoU7NoO2niAQ/edit?gid=332221570#gid=332221570) |
-| **DXS本部_ONB研修マスタ** | 研修管理表マスタ | • **B列**: 研修種別 (「DX ONB/ビジネススキル研修」を対象)<br>• **D列**: 研修名称<br>• **E-H列**: 対象職位<br>• **K列**: セット順番<br>• **L列**: 時間<br>• **P列**: 講師メールアドレス<br>• **Q列**: 会議室要否<br>• **R列**: カレンダーメモ | [DXS本部_ONB研修マスタ](https://docs.google.com/spreadsheets/d/1YNmiNiqSe7ctkHkW3qMOK7K13iodMixKs5WuDrMXsO8/edit?gid=696885769#gid=696885769) |
-| **FLUX_六本木オフィス会議室マスタ** | 会議室マスタ | • **A列**: 会議室名<br>• **B列**: 定員 | [FLUX_六本木オフィス会議室リスト](https://docs.google.com/spreadsheets/d/16xML66Ywi8Q5oFf8e5NEHdJrQPwkjUcJdswwXPxtnCQ/edit?gid=0#gid=0) |
-| **DXS本部_ONB研修自動化_実行ファイル** | 実行シート | • **A列**: 実行日時<br>• **B列**: 実行者<br>• **C列**: カレンダー招待開始日<br>• **D列**: カレンダー招待終了日<br>• **E列**: 処理結果<br>• **F列**: 詳細メッセージ | [DXS本部_ONB研修自動化_実行ファイル](https://docs.google.com/spreadsheets/d/1o3JlRORxDgE6Hv2NyohB2uMRRlr1iSsOA8czmylUGxE/edit?gid=0#gid=0) |
+| **DXS本部_入社者連携シート** | 入社者リスト | • **A列**: 職位 (必須)<br>• **B列**: 経験有無 (必須、「経験者」「未経験者」など)<br>• **C列**: 氏名 (必須)<br>• **D列**: メールアドレス用略称 (必須)<br>• **E列**: メールアドレス (必須)<br>※A〜E列が全て入力された行が処理対象 | [DXS本部_入社者連携シート](https://docs.google.com/spreadsheets/d/1BOfOUnIHotCLatJYKxDNNfndtptlC8NjoU7NoO2niAQ/edit?gid=332221570#gid=332221570) |
+| **DXS本部_ONB研修マスタ** | 研修管理表マスタ | • **A列**: Lv.1 (「DX ONB」「ビジネススキル研修」を対象)<br>• **C列**: 研修名称<br>• **D-G列**: 対象パターン（A:未経験, B:経験C/SC, C:M, D:SMup などに「●」で指定）<br>• **H列**: 実施日（n営業日）<br>• **I列**: コンテンツ実施順<br>• **J列**: 時間（単位：分）<br>• **L列**: 担当者<br>• **N列**: メールアドレス<br>• **O列**: 会議室要否<br>• **P列**: カレンダーメモ | [DXS本部_ONB研修マスタ](https://docs.google.com/spreadsheets/d/1YNmiNiqSe7ctkHkW3qMOK7K13iodMixKs5WuDrMXsO8/edit?gid=696885769#gid=696885769) |
+| **FLUX_六本木オフィス会議室マスタ** | 会議室マスタ | • **A列**: 会議室名<br>• **B列**: カレンダーID<br>• **C列**: 定員 | [FLUX_六本木オフィス会議室リスト](https://docs.google.com/spreadsheets/d/16xML66Ywi8Q5oFf8e5NEHdJrQPwkjUcJdswwXPxtnCQ/edit?gid=0#gid=0) |
+| **DXS本部_ONB研修自動化_実行ファイル** | 実行シート | • **A列**: 実行者<br>• **B列**: 入社日<br>• **C列**: 処理結果<br>• **D列**: 詳細メッセージ<br>• **E列**: 実行日時 | [DXS本部_ONB研修自動化_実行ファイル](https://docs.google.com/spreadsheets/d/1o3JlRORxDgE6Hv2NyohB2uMRRlr1iSsOA8czmylUGxE/edit?gid=0#gid=0) |
 
 ## 3. システム構成
 
@@ -41,6 +43,7 @@ graph TB
         NewHireList[入社者リスト]
         Master[研修管理表マスタ]
         Rooms[会議室マスタ]
+        MappingResult[マッピング結果シート<br>実行結果サマリー]
     end
 
     subgraph "連携サービス"
@@ -54,8 +57,8 @@ graph TB
     GAS -->|読込| Master
     GAS -->|読込| Rooms
     GAS -->|書込| ExecutionSheet
-    GAS -->|書込| NewHireList
-    GAS -->|イベント作成| Calendar
+    GAS -->|"書込(生成)"| MappingResult
+    GAS -->|"イベント作成/空き時間確認"| Calendar
     GAS -->|メール通知| Gmail
 ```
 
@@ -73,6 +76,7 @@ sequenceDiagram
         participant NewHireList as "入社者リスト"
         participant Master as "研修管理表マスタ"
         participant Rooms as "会議室マスタ"
+        participant MappingSheet as "マッピング結果シート"
     end
 
     box rgb(237, 231, 246) "処理エンジン"
@@ -84,59 +88,65 @@ sequenceDiagram
         participant Gmail as "Gmail"
     end
 
-    User->>ExecutionSheet: 1. カレンダー招待開始/終了日等の情報入力
+    User->>ExecutionSheet: 1. 入社日等の情報入力
     User->>ExecutionSheet: 2. 「実行」ボタンをクリック
-    GAS->>ExecutionSheet: 3. 実行パラメータ（招待期間）を読み込み
+    GAS->>ExecutionSheet: 3. 実行パラメータ（入社日）を読み込み
     GAS->>NewHireList: 4. 入社者データを読み込み
-    GAS-->>GAS: 5. 必須項目（職位・メアド）を検証
+    GAS-->>GAS: 5. 必須項目（職位,経験有無,氏名,メアド等）を検証
     alt データ不備あり
         GAS-->>User: 6. 「入社者リストを再度チェックしてください」アラート表示
         GAS->>ExecutionSheet: 7. 実行結果（データ不備）を記録
         GAS->>Gmail: 8. 担当者へエラーをメール通知
     else データ正常
         NewHireList-->>GAS: 6. 検証済みの対象者リストを返す
-        GAS->>Master: 7. 職位に対応する研修情報を取得
+        GAS->>Master: 7. 職位と経験有無に応じた研修情報を取得
         Master-->>GAS: 8. 研修詳細リストを返す
         Note over GAS: 9. 研修ごとに参加者(入社者+講師)をグループ化
-        loop 10. 研修ごと（セット順番に従う）
+        GAS->>MappingSheet: 10. 研修と参加者のマッピング結果シートを生成
+        loop 11. 研修ごと（実施順に従う）
             opt 会議室が必要な場合
-                GAS->>Rooms: 参加人数(入社者+講師)に合う会議室を検索
+                GAS->>Rooms: 参加人数に合う会議室を検索
                 Rooms-->>GAS: 利用可能な会議室情報を返す
             end
-            GAS->>Calendar: 研修イベントを作成・招待
-            Calendar-->>GAS: 作成完了
+            GAS->>Calendar: 12. 講師の空き時間を検索
+            Calendar-->>GAS: 13. 利用可能な時間枠を返す
+            GAS->>Calendar: 14. 研修イベントを作成・招待
+            Calendar-->>GAS: 15. 作成完了
         end
-        GAS->>NewHireList: 11. 処理ステータスを「済」に更新
-        GAS->>ExecutionSheet: 12. 実行結果（成功）を記録
-        GAS->>Gmail: 13. 担当者へ完了をメール通知
+        GAS->>ExecutionSheet: 16. 実行結果（成功）を記録
+        GAS->>Gmail: 17. 担当者へ完了をメール通知
     end
     Note over GAS: ループ中のエラー等、<br>その他の例外発生時もログ記録と<br>メール通知を行う
 ```
 
 #### 3.2.2 テキストベースの処理フロー
 1.  **実行トリガー**
-    -   ONB担当者が`実行シート`を開き、`C列: カレンダー招待開始日`と`D列: カレンダー招待終了日`を入力後、「実行」ボタンをクリックする。
+    -   ONB担当者が`実行シート`を開き、`B列: 入社日`を入力後、「実行」ボタンをクリックする。
 
 2.  **データ読み込みと検証**
-    -   GASは`入社者リスト`を参照し、`E列: 処理状況`が「未処理」の行を取得する。
-    -   対象行ごとに、`A列: 職位`と`D列: メールアドレス`に値が入っているか検証する。
-    -   一つでも不備があれば、担当者にアラートを表示し、`実行シート`の`E列: 処理結果`に「データ不備エラー」と記録して処理を中断する。
+    -   GASは`入社者リスト`を参照し、必須項目（A列:職位, B列:経験有無, C列:氏名, D列:略称, E列:メアド）が全て入力されている行を取得する。
+    -   必須項目に一つでも不備があれば、担当者にアラートを表示し、`実行シート`の`C列: 処理結果`に「データ不備エラー」と記録して処理を中断する。
 
 3.  **研修情報のマッピング**
-    -   GASは`研修管理表マスタ`を読み込み、`B列: 研修種別`が「DX ONB/ビジネススキル研修」の研修を抽出する。
-    -   検証済みの入社者ごとに、`入社者リスト`の`A列: 職位`と`研修管理表マスタ`の`E-H列: 対象職位`を照合し、参加すべき研修を特定する。
+    -   GASは`研修管理表マスタ`を読み込み、`A列: Lv.1`が「DX ONB」または「ビジネススキル研修」の研修を抽出する。
+    -   検証済みの入社者ごとに、`入社者リスト`の`A列: 職位`と`B列: 経験有無`を基に、参加すべき研修パターン（例: A, B, C, D）を内部的に決定する。
+    -   各研修に設定されている対象パターン（`研修管理表マスタ`の`D-G列`の●印）と、各入社者のパターンを照合し、参加すべき研修を特定する。
 
 4.  **研修グループの作成**
-    -   研修ごとに、参加者（入社者リスト）と、`研修管理表マスタ`の`P列: 講師メールアドレス`を参加者としてグループ化する。
-    -   各研修グループに、`D列: 研修名称`、`K列: セット順番`、`L列: 時間`、`Q列: 会議室要否`、`R列: カレンダーメモ`の情報を紐付ける。
+    -   研修ごとに、参加対象となる入社者と、`研修管理表マスタ`の`N列: 講師メールアドレス`を参加者としてグループ化する。
+    -   各研修グループに、`C列: 研修名称`、`H列: 実施日（n営業日）`、`I列: コンテンツ実施順`、`J列: 時間`、`O列: 会議室要否`、`P列: カレンダーメモ`の情報を紐付ける。
 
-5.  **カレンダーイベント作成と招待**
-    -   研修グループを`K列: セット順番`の昇順にソートして、一つずつ処理する。
-    -   **会議室検索**: `Q列`が「必要」の場合、参加者（入社者＋講師）の合計人数を計算し、その人数を収容できる会議室を`会議室マスタ`の`B列: 定員`を基に検索する。該当する会議室の`A列: 会議室名`を取得する。
-    -   **イベント作成**: Google Calendar APIを介し、`L列: 時間`、確保した会議室名（場所として設定）、参加者（入社者＋講師）、`R列: カレンダーメモ`を内容としてイベントを作成し、招待を送付する。
+5.  **マッピング結果シートの生成**
+    -   カレンダー登録の前に、どの研修に誰が参加するかを一覧化した「マッピング結果」シートを`実行ファイル`スプレッドシート内に自動生成する。これにより、担当者は処理内容をひと目で確認できる。
 
-6.  **ステータス更新とログ記録**
-    -   招待が完了した入社者について、`入社者リスト`の`E列: 処理状況`を「済」に更新する。
+6.  **カレンダーイベント作成と招待**
+    -   研修グループを`H列: 実施日（n営業日）`の昇順、同日内では`I列: コンテンツ実施順`の昇順にソートして、一つずつ処理する。
+    -   **日程決定**: `H列: 実施日（n営業日）`の値に基づき、入社日からn営業日後の日付を算出し、その日を基準に研修日程を設定する。
+    -   **会議室検索**: `O列`が「必要」の場合、参加者（入社者＋講師）の合計人数に合う会議室を`会議室マスタ`から検索し、最も定員が近い会議室を確保する。
+    -   **空き時間検索**: 講師のGoogleカレンダーの空き状況を、算出された実施日を基準として検索する。他の予定と重複しない、研修時間分の空きスロットを見つける。
+    -   **イベント作成**: 見つかった空き時間と確保した会議室で、Google Calendar APIを介してイベントを作成し、参加者（入社者＋講師）に招待を送付する。カレンダーの説明には`P列: カレンダーメモ`の内容が記載される。
+
+7.  **ログ記録と通知**
     -   全処理が正常に完了したら、`実行シート`に「成功」と記録し、担当者に完了通知メールを送信する。
     -   処理中にエラーが発生した場合は、その内容を`実行シート`に記録し、エラー通知メールを送信する。
 
@@ -147,18 +157,19 @@ sequenceDiagram
     participant NewHireList as "入社者リスト"
     participant ExecutionSheet as "実行シート"
     participant System as "自動化システム"
+    participant MappingResult as "マッピング結果シート"
 
     Note over User: 新入社員の情報を受領
-    User->>NewHireList: 1. 新入社員の情報（氏名、職位、メアド）を入力
+    User->>NewHireList: 1. 新入社員の情報（氏名、職位、経験有無、メアド等）を入力
     
     Note over User: 研修招待を実行するタイミングで
-    User->>ExecutionSheet: 2. カレンダー招待期間などを入力し、「実行」ボタンをクリック
+    User->>ExecutionSheet: 2. 入社日を入力し、「実行」ボタンをクリック
     
     System->>User: 3. 処理結果（成功/エラー）をメールで通知
     
     Note right of User: 処理完了後
     User->>ExecutionSheet: 4. 実行ログで処理内容を確認
-    User->>NewHireList: 5. 招待状況が「済」になっていることを確認
+    User->>MappingResult: 5. 生成されたマッピング結果シートで研修割り当てを確認
 ```
 
 ## 4. 実装仕様
@@ -169,7 +180,7 @@ sequenceDiagram
 #### `Main.gs` - メイン処理
 スクリプト全体の起点となるファイルです。UI（メニュー）の作成や、各モジュールを呼び出して処理全体を制御するメイン関数が含まれます。
 - **`onOpen()`**: スプレッドシートを開いた時にカスタムメニューをUIに追加します。
-- **`executeONBAutomation()`**: 実行ボタンから呼び出されるメイン関数。データ取得、検証、カレンダー作成、ステータス更新、通知までの一連の処理フローを管理し、エラーハンドリングを行います。
+- **`executeONBAutomation()`**: 実行ボタンから呼び出されるメイン関数。データ取得、検証、研修グループ化、マッピングシート生成、カレンダー作成、ログ記録、通知までの一連の処理フローを管理し、エラーハンドリングを行います。
 
 #### `Constants.gs` - 定数管理
 スプレッドシートのIDやシート名、通知先のメールアドレスなど、プロジェクト全体で共有される設定値を定数として管理します。
@@ -179,23 +190,28 @@ sequenceDiagram
 
 #### `SheetUtils.gs` - スプレッドシート操作
 Google Sheetsに対するデータの読み書きに特化したユーティリティ関数を管理します。
-- **`getNewHires() : Array<Object>`**: `入社者リスト`から未処理のデータを取得します。
-- **`updateStatuses(processedHires: Array<Object>)`**: 処理が完了した入社者のステータスを`入社者リスト`上で「済」に更新します。
+- **`getNewHires() : Array<Object>`**: `入社者リスト`から必須項目が全て入力された未処理のデータを取得します。
 - **`logExecution(params: Object, status: string, message: string)`**: `実行シート`に処理結果のログを記録します。
+- **`createMappingSheet(trainingGroups: Array<Object>, ...)`**: 研修の割り当て結果をまとめた「マッピング結果シート」を新規に作成します。
+- **`updateStatuses(...)`**: (現在未使用) 過去バージョンで利用されていたステータス更新機能。
 
 #### `Logic.gs` - ビジネスロジック
 アプリケーションの中核となるロジック（データ検証、研修のマッピングなど）を担当します。
 - **`validateNewHires(newHires: Array<Object>)`**: `入社者リスト`の必須項目が入力されているか検証します。
-- **`groupTrainingsForHires(newHires: Array<Object>) : Array<Object>`**: 入社者と`研修管理表マスタ`を基に、研修ごとの参加者や詳細情報をグループ化します。
+- **`determineTrainingPattern(rank: string, experience: string) : string`**: 職位と経験有無から、その入社者がどの研修パターン（A, B, C, Dなど）に属するかを判定します。
+- **`groupTrainingsForHires(newHires: Array<Object>) : Array<Object>`**: `determineTrainingPattern`の結果と`研修管理表マスタ`を基に、研修ごとの参加者や詳細情報をグループ化します。
 
 #### `CalendarUtils.gs` - カレンダー連携
 Google Calendarとの連携に特化したユーティリティ関数を管理します。
-- **`findAvailableRoomName(numberOfAttendees: number) : string`**: `会議室マスタ`から参加人数に合う会議室を検索します。
-- **`createCalendarEvent(trainingDetails: Object, roomName: string)`**: 研修情報と会議室名を基に、カレンダーイベントを作成し招待を送付します。
+- **`createAllCalendarEvents(trainingGroups: Array<Object>, ...)`**: 全ての研修グループについて、カレンダーイベントの作成を統括します。
+- **`findAvailableTimeSlot(trainingGroup: Object, ...)`**: 講師のGoogleカレンダーの空き状況と、他の研修との重複を確認し、最適なイベント日時を検索します。
+- **`findAvailableRoomName(numberOfAttendees: number) : string`**: `会議室マスタ`から参加人数に合う最小の会議室を検索します。
+- **`createSingleCalendarEvent(trainingDetails: Object, ...)`**: 個別のカレンダーイベントを作成し招待を送付します。
 
 #### `NotificationUtils.gs` - 通知処理
-メール通知に関する処理を専門に担当します。
+メール通知や詳細なログ出力に関する処理を専門に担当します。
 - **`sendNotificationEmail(subject: string, body: string)`**: 担当者へ処理結果（成功・エラー）の通知メールを送信します。
+- **`writeLog(level, message, ...)`**: 実行ログ（Google Cloud Logs）に詳細なトレース情報を記録します。
 
 #### 4.1.1 関数呼び出しフロー
 `executeONBAutomation`関数が各モジュールの関数を呼び出す流れを以下に示します。
@@ -207,6 +223,7 @@ sequenceDiagram
     participant Logic as "Logic.gs"
     participant CalendarUtils as "CalendarUtils.gs"
     participant NotificationUtils as "NotificationUtils.gs"
+    participant GCalendar as "Google Calendar API"
 
     Note over Main, SheetUtils: 1. 未処理の入社者リストを取得
     Main->>SheetUtils: getNewHires()
@@ -219,16 +236,20 @@ sequenceDiagram
     Main->>Logic: groupTrainingsForHires(newHiresData)
     Logic-->>Main: trainingGroups
     
-    loop 4. 研修グループごとにカレンダーイベントを作成
-        alt 会議室が必要な場合
-            Main->>CalendarUtils: findAvailableRoomName(attendees.length)
-            CalendarUtils-->>Main: roomName
-        end
-        Main->>CalendarUtils: createCalendarEvent(group, roomName)
-    end
+    Note over Main, SheetUtils: 4. マッピング結果をシートに出力
+    Main->>SheetUtils: createMappingSheet(trainingGroups, ...)
     
-    Note over Main, SheetUtils: 5. 全員の処理ステータスを「済」に更新
-    Main->>SheetUtils: updateStatuses(newHiresData)
+    Note over Main, CalendarUtils: 5. 全研修のカレンダーイベントを作成
+    Main->>CalendarUtils: createAllCalendarEvents(trainingGroups, ...)
+    
+    loop 研修グループごと
+        CalendarUtils->>CalendarUtils: findAvailableTimeSlot(...)
+        Note right of CalendarUtils: 講師の空き時間を検索
+        CalendarUtils->>GCalendar: getEvents(...)
+        GCalendar-->>CalendarUtils: 講師の予定
+        
+        CalendarUtils->>CalendarUtils: createSingleCalendarEvent(...)
+    end
     
     Note over Main, NotificationUtils: 6. 最終結果をログに記録し、メールで通知
     alt 正常終了
@@ -242,9 +263,9 @@ sequenceDiagram
 
 ### 4.2 エラーハンドリング
 - try-catch文による例外処理を`Main.gs`の`executeONBAutomation`に実装する。
-- データ不備、会議室の空き無し、APIエラーなど、予期されるエラーは個別のメッセージでハンドリングし、ログとメールで担当者に通知する。
+- データ不備、会議室の空き無し、APIエラー、講師の空き時間が見つからない場合など、予期されるエラーは個別のメッセージでハンドリングし、ログとメールで担当者に通知する。
 - 処理の実行履歴とエラー内容を「DXS本部_ONB研修自動化_実行ファイル」にログとして保存する。
-- 部分的な失敗が発生した場合、手動で補完できる運用を想定する。
+- 部分的な失敗が発生した場合でも、生成された「マッピング結果シート」を元に手動で補完できる運用を想定する。
 
 ## 5. セキュリティ設定
 

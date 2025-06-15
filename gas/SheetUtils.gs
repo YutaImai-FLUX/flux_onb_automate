@@ -163,7 +163,7 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
     writeLog('INFO', '新しいシート作成: ' + sheetName);
     
     // ヘッダー行を作成
-    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'カレンダーID', '処理状況'];
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'カレンダーID', '処理状況', 'エラー詳細'];
     
     // ヘッダーを設定
     mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -210,7 +210,8 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
             '待機中...',                                                   // F列: 会議室名（初期値）
             '待機中...',                                                   // G列: 研修実施日時（初期値）
             '',                                                           // H列: カレンダーID（初期値）
-            '待機中'                                                      // I列: 処理状況
+            '待機中',                                                      // I列: 処理状況
+            ''                                                           // J列: エラー詳細（初期値）
         ];
         
         dataRows.push(row);
@@ -236,6 +237,7 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
         mappingSheet.setColumnWidth(7, 180);  // 研修実施日時
         mappingSheet.setColumnWidth(8, 100);  // カレンダーID
         mappingSheet.setColumnWidth(9, 120);  // 処理状況
+        mappingSheet.setColumnWidth(10, 300); // エラー詳細
         
         // 列の固定
         mappingSheet.setFrozenColumns(1);
@@ -828,4 +830,39 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
     writeLog('INFO', 'スケジュール結果マッピングシート作成完了: ' + scheduleResults.length + '件の研修, 成功: ' + successCount + '件');
     
     return mappingSheet;
+}
+
+function updateMappingSheetRow(mappingSheet, rowIndex, updates) {
+    try {
+        if (updates.roomName !== undefined) {
+            mappingSheet.getRange(rowIndex, 6).setValue(updates.roomName); // F列: 会議室名
+        }
+        if (updates.schedule !== undefined) {
+            mappingSheet.getRange(rowIndex, 7).setValue(updates.schedule); // G列: 研修実施日時
+        }
+        if (updates.calendarId !== undefined) {
+            mappingSheet.getRange(rowIndex, 8).setValue(updates.calendarId); // H列: カレンダーID
+        }
+        if (updates.status !== undefined) {
+            var statusCell = mappingSheet.getRange(rowIndex, 9); // I列: 処理状況
+            statusCell.setValue(updates.status);
+            
+            // 処理状況に応じた背景色設定
+            if (updates.status.indexOf('成功') !== -1) {
+                statusCell.setBackground('#d4edda').setFontColor('#155724');
+            } else if (updates.status.indexOf('失敗') !== -1) {
+                statusCell.setBackground('#f8d7da').setFontColor('#721c24');
+            } else if (updates.status.indexOf('スキップ') !== -1) {
+                statusCell.setBackground('#e2e3e5').setFontColor('#383d41');
+            }
+        }
+        if (updates.errorReason !== undefined) {
+            mappingSheet.getRange(rowIndex, 10).setValue(updates.errorReason); // J列: エラー詳細
+        }
+        
+        // 表示を強制的に更新
+        SpreadsheetApp.flush();
+    } catch (e) {
+        writeLog('ERROR', 'マッピングシート行更新エラー: ' + e.message);
+    }
 } 
