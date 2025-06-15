@@ -9,7 +9,7 @@ function テスト_複数講師対応() {
   try {
     writeLog('INFO', '=== 複数講師対応テスト開始 ===');
     
-    // 入社者データ取得
+    // 入社者データ取得（テスト用：入社日フィルタなし）
     var newHires = getNewHires();
     if (newHires.length === 0) {
       SpreadsheetApp.getUi().alert('警告', '入社者データがありません。', SpreadsheetApp.getUi().ButtonSet.OK);
@@ -74,6 +74,7 @@ function テスト_入社者データ取得() {
   try {
     writeLog('INFO', '=== 入社者データ取得テスト開始 ===');
     
+    // テスト用：入社日フィルタなし
     var newHires = getNewHires();
     
     var message = '入社者データ取得テスト結果:\n\n';
@@ -372,110 +373,141 @@ function テスト_カレンダー重複問題検証() {
   try {
     writeLog('INFO', '=== カレンダー重複問題検証テスト開始 ===');
     
-    var message = 'カレンダー重複問題検証テスト結果:\n\n';
-    
-    // 1. ユニークキー生成テスト
-    writeLog('INFO', 'ユニークキー生成テスト実行中...');
-    var testGroups = [
-      {
-        name: '【DX オンボ】 ONBキックオフ（C/SC）',
-        implementationDay: 1,
-        sequence: 1,
-        lecturer: 'instructor1@example.com',
-        lecturerEmails: ['instructor1@example.com'],
-        attendees: ['student1@example.com', 'instructor1@example.com']
-      },
-      {
-        name: '【DX オンボ】 ONBキックオフ（C/SC）',
-        implementationDay: 1,
-        sequence: 1,
-        lecturer: 'instructor1@example.com',
-        lecturerEmails: ['instructor1@example.com'],
-        attendees: ['student1@example.com', 'instructor1@example.com'] // 同じ
-      },
-      {
-        name: '【DX オンボ】 ONBキックオフ（C/SC）',
-        implementationDay: 1,
-        sequence: 1,
-        lecturer: 'instructor1@example.com',
-        lecturerEmails: ['instructor1@example.com'],
-        attendees: ['student2@example.com', 'instructor1@example.com'] // 異なる参加者
-      }
-    ];
-    
-    var uniqueKeys = [];
-    for (var i = 0; i < testGroups.length; i++) {
-      var key = generateEventUniqueKey(testGroups[i]);
-      uniqueKeys.push(key);
+    // 入社者データ取得（テスト用：入社日フィルタなし）
+    var newHires = getNewHires();
+    if (newHires.length === 0) {
+      SpreadsheetApp.getUi().alert('警告', '入社者データがありません。', SpreadsheetApp.getUi().ButtonSet.OK);
+      return;
     }
     
-    message += '【ユニークキー生成テスト】\n';
-    message += 'キー1: ' + uniqueKeys[0].substring(0, 50) + '...\n';
-    message += 'キー2: ' + uniqueKeys[1].substring(0, 50) + '...\n';
-    message += 'キー3: ' + uniqueKeys[2].substring(0, 50) + '...\n';
-    message += '1=2? ' + (uniqueKeys[0] === uniqueKeys[1] ? '✅' : '❌') + '\n';
-    message += '1=3? ' + (uniqueKeys[0] === uniqueKeys[2] ? '❌' : '✅') + '\n\n';
+    // 研修グループ作成
+    var trainingGroups = groupTrainingsForHires(newHires);
     
-    // 2. 昼休み時間重複チェックテスト
-    writeLog('INFO', '昼休み時間重複チェックテスト実行中...');
-    var testDate = new Date();
-    testDate.setHours(0, 0, 0, 0);
+    // テスト用の入社日（今日）
+    var hireDate = new Date();
+    hireDate.setHours(9, 0, 0, 0);
     
-    var testCases = [
-      { start: new Date(testDate.getTime() + 11 * 60 * 60 * 1000), end: new Date(testDate.getTime() + 12 * 60 * 60 * 1000), expected: false }, // 11:00-12:00
-      { start: new Date(testDate.getTime() + 12 * 60 * 60 * 1000), end: new Date(testDate.getTime() + 13 * 60 * 60 * 1000), expected: true },  // 12:00-13:00
-      { start: new Date(testDate.getTime() + 12.5 * 60 * 60 * 1000), end: new Date(testDate.getTime() + 13.5 * 60 * 60 * 1000), expected: true }, // 12:30-13:30
-      { start: new Date(testDate.getTime() + 13 * 60 * 60 * 1000), end: new Date(testDate.getTime() + 14 * 60 * 60 * 1000), expected: false } // 13:00-14:00
-    ];
+    writeLog('INFO', '重複検証テスト: 入社者' + newHires.length + '名, 研修' + trainingGroups.length + '件');
     
-    message += '【昼休み時間重複チェックテスト】\n';
-    var allLunchTestsPassed = true;
-    for (var i = 0; i < testCases.length; i++) {
-      var testCase = testCases[i];
-      var result = isLunchTimeOverlap(testCase.start, testCase.end);
-      var passed = (result === testCase.expected);
-      allLunchTestsPassed = allLunchTestsPassed && passed;
-      
-      message += (i + 1) + '. ' + Utilities.formatDate(testCase.start, 'Asia/Tokyo', 'HH:mm') + 
-                 '-' + Utilities.formatDate(testCase.end, 'Asia/Tokyo', 'HH:mm') + 
-                 ': ' + (passed ? '✅' : '❌') + '\n';
-    }
-    message += '昼休みテスト全体: ' + (allLunchTestsPassed ? '✅ 全て合格' : '❌ 失敗あり') + '\n\n';
+    // 一時的にscheduledEventsをリセット
+    var originalScheduledEvents = scheduledEvents.slice();
+    scheduledEvents = [];
     
-    // 3. 会議室予約管理システムテスト
-    writeLog('INFO', '会議室予約管理システムテスト実行中...');
     var roomManager = RoomReservationManager.getInstance();
     roomManager.reset();
     
-    var testTime1 = new Date();
-    testTime1.setHours(9, 0, 0, 0);
-    var testTime2 = new Date();
-    testTime2.setHours(10, 0, 0, 0);
-    var testTime3 = new Date();
-    testTime3.setHours(9, 30, 0, 0);
-    var testTime4 = new Date();
-    testTime4.setHours(10, 30, 0, 0);
+    // 各研修の時間枠を計算
+    var timeSlots = [];
+    var conflicts = [];
     
-    var reservation1 = roomManager.reserveRoom('TEST_ROOM', 'test@example.com', testTime1, testTime2, '研修A');
-    var available1 = roomManager.isRoomAvailable('TEST_ROOM', testTime3, testTime4); // 重複
-    var available2 = roomManager.isRoomAvailable('TEST_ROOM', testTime2, testTime4); // 非重複
+    for (var i = 0; i < Math.min(16, trainingGroups.length); i++) {
+      var group = trainingGroups[i];
+      
+      writeLog('INFO', '研修時間枠計算: ' + (i + 1) + '/' + Math.min(16, trainingGroups.length) + ' - ' + group.name);
+      
+      var timeSlot = findAvailableTimeSlot(group, hireDate);
+      
+      if (timeSlot) {
+        // 既存の時間枠との重複をチェック
+        for (var j = 0; j < timeSlots.length; j++) {
+          var existing = timeSlots[j];
+          
+          // 時間重複チェック
+          if (!(timeSlot.end <= existing.start || timeSlot.start >= existing.end)) {
+            // 参加者重複チェック
+            var hasCommonAttendee = false;
+            if (group.attendees && existing.group.attendees) {
+              for (var k = 0; k < group.attendees.length; k++) {
+                if (existing.group.attendees.indexOf(group.attendees[k]) !== -1) {
+                  hasCommonAttendee = true;
+                  break;
+                }
+              }
+            }
+            
+            conflicts.push({
+              event1: group.name,
+              event2: existing.group.name,
+              time1: Utilities.formatDate(timeSlot.start, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                     Utilities.formatDate(timeSlot.end, 'Asia/Tokyo', 'HH:mm'),
+              time2: Utilities.formatDate(existing.start, 'Asia/Tokyo', 'MM/dd HH:mm') + '-' + 
+                     Utilities.formatDate(existing.end, 'Asia/Tokyo', 'HH:mm'),
+              hasCommonAttendee: hasCommonAttendee
+            });
+          }
+        }
+        
+        timeSlots.push({
+          group: group,
+          start: timeSlot.start,
+          end: timeSlot.end
+        });
+        
+        // scheduledEventsに追加（後続の重複チェックのため）
+        scheduledEvents.push({
+          name: group.name,
+          startTime: timeSlot.start,
+          endTime: timeSlot.end,
+          attendees: group.attendees || [],
+          uniqueKey: generateEventUniqueKey({
+            name: group.name,
+            startTime: timeSlot.start,
+            attendees: group.attendees || []
+          })
+        });
+      } else {
+        writeLog('WARN', '時間枠取得失敗: ' + group.name);
+      }
+    }
     
-    message += '【会議室予約管理システムテスト】\n';
-    message += '予約1 (9:00-10:00): ' + (reservation1 ? '✅ 成功' : '❌ 失敗') + '\n';
-    message += '重複チェック (9:30-10:30): ' + (available1 ? '❌ 空いている' : '✅ 使用中') + '\n';
-    message += '非重複チェック (10:00-10:30): ' + (available2 ? '✅ 空いている' : '❌ 使用中') + '\n';
+    // scheduledEventsを元に戻す
+    scheduledEvents = originalScheduledEvents;
     
-    var allRoomTestsPassed = reservation1 && !available1 && available2;
-    message += '会議室テスト全体: ' + (allRoomTestsPassed ? '✅ 全て合格' : '❌ 失敗あり') + '\n\n';
+    var message = 'カレンダー重複問題検証結果（詰め配置版）:\n\n';
+    message += '【スケジューリング結果】\n';
+    message += '対象研修数: ' + Math.min(16, trainingGroups.length) + '件\n';
+    message += '成功: ' + timeSlots.length + '件\n';
+    message += '失敗: ' + (Math.min(16, trainingGroups.length) - timeSlots.length) + '件\n\n';
     
-    // 総合判定
-    var overallSuccess = allLunchTestsPassed && allRoomTestsPassed;
-    message += '【総合判定】\n';
-    message += (overallSuccess ? '✅ 全テスト合格 - 重複問題の修正が有効' : '❌ 一部テスト失敗 - 追加修正が必要') + '\n\n';
+    // 詰め配置の効果を確認
+    if (timeSlots.length > 1) {
+      message += '【詰め配置効果確認】\n';
+      for (var i = 0; i < Math.min(5, timeSlots.length); i++) {
+        var slot = timeSlots[i];
+        message += (i + 1) + '. ' + slot.group.name.substring(0, 30) + '...\n';
+        message += '   時間: ' + Utilities.formatDate(slot.start, 'Asia/Tokyo', 'MM/dd HH:mm') + 
+                   '-' + Utilities.formatDate(slot.end, 'Asia/Tokyo', 'HH:mm') + '\n';
+        
+        if (i > 0) {
+          var prevSlot = timeSlots[i - 1];
+          var gap = (slot.start.getTime() - prevSlot.end.getTime()) / (1000 * 60);
+          message += '   前研修との間隔: ' + gap + '分\n';
+        }
+        message += '\n';
+      }
+    }
     
-    message += '詳細なログは実行ログシートをご確認ください。';
+    message += '【重複チェック結果】\n';
+    if (conflicts.length === 0) {
+      message += '✅ 時間重複なし - 正常にスケジュールされました\n';
+    } else {
+      message += '❌ 時間重複あり: ' + conflicts.length + '件\n\n';
+      message += '重複詳細:\n';
+      for (var i = 0; i < Math.min(3, conflicts.length); i++) {
+        var conflict = conflicts[i];
+        var icon = conflict.hasCommonAttendee ? '⚠️' : 'ℹ️';
+        message += icon + ' ' + conflict.event1 + ' vs ' + conflict.event2 + '\n';
+        message += '   ' + conflict.time1 + ' / ' + conflict.time2 + '\n';
+      }
+      
+      if (conflicts.length > 3) {
+        message += '... 他' + (conflicts.length - 3) + '件\n';
+      }
+    }
     
-    SpreadsheetApp.getUi().alert('テスト結果', message, SpreadsheetApp.getUi().ButtonSet.OK);
+    message += '\n詳細なログは実行ログシートをご確認ください。';
+    
+    SpreadsheetApp.getUi().alert('検証結果', message, SpreadsheetApp.getUi().ButtonSet.OK);
     writeLog('INFO', '=== カレンダー重複問題検証テスト完了 ===');
     
   } catch (e) {
@@ -483,3 +515,4 @@ function テスト_カレンダー重複問題検証() {
     SpreadsheetApp.getUi().alert('エラー', 'カレンダー重複問題検証テストでエラーが発生しました:\n' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
+

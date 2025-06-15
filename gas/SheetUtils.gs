@@ -4,9 +4,10 @@
 
 /**
  * `入社者リスト`から未処理のデータを取得する
+ * @param {Date} targetHireDate - 対象の入社日（指定された場合、この日付の入社者のみを取得）
  * @returns {Array<Object>} 入社者情報の配列
  */
-function getNewHires() {
+function getNewHires(targetHireDate) {
   var sheet = SpreadsheetApp.openById(SPREADSHEET_IDS.NEW_HIRES).getSheetByName(SHEET_NAMES.NEW_HIRES);
   var lastRow = sheet.getLastRow();
   writeLog('DEBUG', '入社者リストの最終行: ' + lastRow);
@@ -16,7 +17,7 @@ function getNewHires() {
     return [];
   }
   
-  var data = sheet.getRange(2, 1, lastRow - 1, 14).getValues(); // 14列取得
+  var data = sheet.getRange(2, 1, lastRow - 1, 15).getValues(); // 15列取得（所属列追加後）
   writeLog('DEBUG', '取得したデータ行数: ' + data.length);
   
   var newHires = [];
@@ -25,35 +26,75 @@ function getNewHires() {
     var rank = row[0];           // A列: 職位
     var experience = row[1];     // B列: 経験有無
     var name = row[2];           // C列: 名前
-    var emailShort = row[3];     // D列: メールアドレス用略称
-    var email = row[4];          // E列: メールアドレス
+    var email = row[3];          // D列: メールアドレス
+    var department = row[4];     // E列: 所属
+    var hireDate = row[5];       // F列: 入社日
     
     writeLog('DEBUG', '【デバッグ】行' + (i + 2) + ' 生データ: ' + JSON.stringify(row));
-    writeLog('DEBUG', '行' + (i + 2) + ': 職位=' + rank + ', 経験=' + experience + ', 氏名=' + name + ', 略称=' + emailShort + ', メール=' + email);
+    writeLog('DEBUG', '行' + (i + 2) + ': 職位=' + rank + ', 経験=' + experience + ', 氏名=' + name + ', メール=' + email + ', 所属=' + department + ', 入社日=' + hireDate);
     
-    // A~E列（職位、経験有無、名前、略称、メールアドレス）が全て入力されている行のみを対象とする
+    // A~F列（職位、経験有無、名前、メールアドレス、所属、入社日）が全て入力されている行のみを対象とする
     if (rank && rank.trim() !== '' && 
         experience && experience.trim() !== '' && 
         name && name.trim() !== '' && 
-        emailShort && emailShort.trim() !== '' && 
-        email && email.trim() !== '') {
+        email && email.trim() !== '' && 
+        department && department.trim() !== '' &&
+        hireDate && hireDate !== '') {
+      
+      // 入社日の形式チェック（Date型への変換チェック）
+      var parsedHireDate = null;
+      try {
+        if (hireDate instanceof Date) {
+          parsedHireDate = new Date(hireDate);
+        } else if (typeof hireDate === 'string' && hireDate.trim() !== '') {
+          parsedHireDate = new Date(hireDate.trim());
+        } else if (typeof hireDate === 'number') {
+          // Excelのシリアル値の場合
+          parsedHireDate = new Date(hireDate);
+        }
+        
+        // 有効な日付かチェック
+        if (!parsedHireDate || isNaN(parsedHireDate.getTime())) {
+          writeLog('WARN', '行' + (i + 2) + ': 無効な入社日形式のためスキップ: ' + hireDate);
+          continue;
+        }
+      } catch (e) {
+        writeLog('WARN', '行' + (i + 2) + ': 入社日解析エラーのためスキップ: ' + hireDate + ' - ' + e.message);
+        continue;
+      }
+      
+      // 対象入社日による絞り込み（指定された場合のみ）
+      if (targetHireDate) {
+        var targetDateOnly = new Date(targetHireDate.getFullYear(), targetHireDate.getMonth(), targetHireDate.getDate());
+        var parsedDateOnly = new Date(parsedHireDate.getFullYear(), parsedHireDate.getMonth(), parsedHireDate.getDate());
+        
+        if (targetDateOnly.getTime() !== parsedDateOnly.getTime()) {
+          writeLog('DEBUG', '行' + (i + 2) + ': 入社日不一致のためスキップ: 対象日=' + 
+                   Utilities.formatDate(targetHireDate, 'Asia/Tokyo', 'yyyy/MM/dd') + 
+                   ', 実際=' + Utilities.formatDate(parsedHireDate, 'Asia/Tokyo', 'yyyy/MM/dd'));
+          continue;
+        }
+      }
       
       newHires.push({
         rowNum: i + 2, // 実際の行番号
         rank: rank.trim(),         // A列: 職位
         experience: experience.trim(), // B列: 経験有無
         name: name.trim(),         // C列: 名前
-        email: email.trim(),       // E列: メールアドレス
+        email: email.trim(),       // D列: メールアドレス
+        department: department.trim(), // E列: 所属
+        hireDate: parsedHireDate,  // F列: 入社日
       });
       
-      writeLog('INFO', '入社者追加: ' + name + ' (職位:' + rank + ', 経験:' + experience + ', メール:' + email + ')');
+      writeLog('INFO', '入社者追加: ' + name + ' (職位:' + rank + ', 経験:' + experience + ', 所属:' + department + ', メール:' + email + ', 入社日:' + Utilities.formatDate(parsedHireDate, 'Asia/Tokyo', 'yyyy/MM/dd') + ')');
     } else {
       var missingFields = [];
       if (!rank || rank.trim() === '') missingFields.push('職位');
       if (!experience || experience.trim() === '') missingFields.push('経験有無');
       if (!name || name.trim() === '') missingFields.push('名前');
-      if (!emailShort || emailShort.trim() === '') missingFields.push('略称');
       if (!email || email.trim() === '') missingFields.push('メールアドレス');
+      if (!department || department.trim() === '') missingFields.push('所属');
+      if (!hireDate || hireDate === '') missingFields.push('入社日');
       
       writeLog('DEBUG', '行' + (i + 2) + ': 必須項目未入力のためスキップ (未入力: ' + missingFields.join(', ') + ')');
     }
@@ -95,7 +136,117 @@ function logExecution(params, status, message) {
 }
 
 /**
- * 研修と入社者のマッピング結果をシートに表示する
+ * インクリメンタル処理用のマッピングシートを作成する
+ * @param {Array<Object>} trainingGroups - 研修グループの配列
+ * @param {Array<Object>} allNewHires - 全入社者の配列
+ * @param {Date} periodStart - 研修期間開始日
+ * @param {Date} periodEnd - 研修期間終了日
+ * @returns {Object} 作成されたマッピングシート
+ */
+function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd) {
+    writeLog('INFO', 'インクリメンタルマッピングシート作成開始');
+    writeLog('DEBUG', '引数確認: trainingGroups=' + trainingGroups.length + ', allNewHires=' + allNewHires.length);
+    
+    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.EXECUTION);
+    var sheetName = 'マッピング結果_' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd_HH-mm');
+    
+    // 既存のマッピングシートがあれば削除
+    var existingSheets = spreadsheet.getSheets();
+    for (var i = 0; i < existingSheets.length; i++) {
+        if (existingSheets[i].getName().indexOf('マッピング結果_') === 0) {
+            spreadsheet.deleteSheet(existingSheets[i]);
+        }
+    }
+    
+    // 新しいシートを作成
+    var mappingSheet = spreadsheet.insertSheet(sheetName);
+    writeLog('INFO', '新しいシート作成: ' + sheetName);
+    
+    // ヘッダー行を作成
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'カレンダーID', '処理状況'];
+    
+    // ヘッダーを設定
+    mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    
+    // ヘッダー行のスタイル設定
+    var headerRange = mappingSheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#4a90e2');
+    headerRange.setFontColor('white');
+    headerRange.setFontWeight('bold');
+    headerRange.setWrap(true);
+    headerRange.setVerticalAlignment('middle');
+    
+    // 各研修の初期行を作成（処理状況は「待機中」に設定）
+    var dataRows = [];
+    for (var i = 0; i < trainingGroups.length; i++) {
+        var group = trainingGroups[i];
+        
+        if (!group || !group.name) {
+            writeLog('ERROR', '研修グループ[' + i + ']が無効です。スキップします。');
+            continue;
+        }
+        
+        // 参加者リスト作成
+        var participants = [];
+        for (var j = 0; j < allNewHires.length; j++) {
+            var hire = allNewHires[j];
+            if (group.attendees && group.attendees.indexOf(hire.email) !== -1) {
+                participants.push(hire.name + '(' + hire.rank + '/' + hire.experience + '/' + hire.department + ')');
+            }
+        }
+        var participantsList = participants.join('\n');
+        
+        // 参加者数計算
+        var lecturerCount = (group.lecturerEmails && group.lecturerEmails.length > 0) ? group.lecturerEmails.length : (group.lecturer ? 1 : 0);
+        var participantCount = (participants ? participants.length : 0) + lecturerCount;
+        
+        var row = [
+            group.name,                                                    // A列: 研修名
+            participantsList,                                              // B列: 対象者
+            (group.lecturerNames && group.lecturerNames.length > 0) ?      // C列: 講師
+                group.lecturerNames.join('\n') : (group.lecturer || ''),
+            participantCount,                                              // D列: 参加者数
+            group.needsRoom ? '必要' : '不要',                              // E列: 会議室要否
+            '待機中...',                                                   // F列: 会議室名（初期値）
+            '待機中...',                                                   // G列: 研修実施日時（初期値）
+            '',                                                           // H列: カレンダーID（初期値）
+            '待機中'                                                      // I列: 処理状況
+        ];
+        
+        dataRows.push(row);
+    }
+    
+    // データを設定
+    if (dataRows.length > 0) {
+        mappingSheet.getRange(2, 1, dataRows.length, dataRows[0].length).setValues(dataRows);
+        writeLog('INFO', 'データ書き込み成功: ' + dataRows.length + '行');
+        
+        // スタイル設定
+        var dataRange = mappingSheet.getRange(2, 1, dataRows.length, headers.length);
+        dataRange.setBorder(true, true, true, true, true, true);
+        dataRange.setVerticalAlignment('top');
+        
+        // 列幅設定
+        mappingSheet.setColumnWidth(1, 250);  // 研修名
+        mappingSheet.setColumnWidth(2, 300);  // 対象者
+        mappingSheet.setColumnWidth(3, 200);  // 講師
+        mappingSheet.setColumnWidth(4, 80);   // 参加者数
+        mappingSheet.setColumnWidth(5, 100);  // 会議室要否
+        mappingSheet.setColumnWidth(6, 150);  // 会議室名
+        mappingSheet.setColumnWidth(7, 180);  // 研修実施日時
+        mappingSheet.setColumnWidth(8, 100);  // カレンダーID
+        mappingSheet.setColumnWidth(9, 120);  // 処理状況
+        
+        // 列の固定
+        mappingSheet.setFrozenColumns(1);
+    }
+    
+    writeLog('INFO', 'インクリメンタルマッピングシート作成完了: ' + trainingGroups.length + '件の研修');
+    return mappingSheet;
+}
+
+/**
+ * 研修と入社者のマッピング結果をシートに表示する（従来版）
  * @param {Array<Object>} trainingGroups - 研修グループの配列
  * @param {Array<Object>} allNewHires - 全入社者の配列
  * @param {Date} periodStart - 研修期間開始日
@@ -171,30 +322,39 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
         for (var j = 0; j < allNewHires.length; j++) {
             var hire = allNewHires[j];
             if (group.attendees.indexOf(hire.email) !== -1) {
-                participants.push(hire.name + '(' + hire.rank + '/' + hire.experience + ')');
+                participants.push(hire.name + '(' + hire.rank + '/' + hire.experience + '/' + hire.department + ')');
             }
         }
         var participantsList = participants.join('\n');
         
-        // 参加者数（講師を除く）
-        var participantCount = participants.length;
+        // 参加者数（入社者＋講師の合計）
+        var lecturerCount = (group.lecturerEmails && group.lecturerEmails.length > 0) ? group.lecturerEmails.length : (group.lecturer ? 1 : 0);
+        var participantCount = (participants ? participants.length : 0) + lecturerCount;
+        
+        writeLog('DEBUG', '参加者数計算 (表示用): ' + group.name + ' - 入社者' + (participants ? participants.length : 0) + '名, 講師' + lecturerCount + '名, 合計' + participantCount + '名');
         
         // 会議室名を取得（実際の会議室名を表示）
-        var roomName = '';
+        var roomNameInfo = { roomName: '' };
         var needsRoom = group.needsRoom || false;
         if (needsRoom && participantCount > 0) {
             try {
-                // 実際の会議室確保を試行
-                var lecturerCount = group.lecturerEmails ? group.lecturerEmails.length : 1;
-                var totalAttendeeCount = participantCount + lecturerCount;
-                roomName = findAvailableRoomName(totalAttendeeCount);
-                writeLog('DEBUG', '会議室確保: ' + roomName + ' (総参加者: ' + totalAttendeeCount + '名)');
+                // 実際の会議室確保を試行（participantCountには既に講師数が含まれている）
+                var roomResult = findAvailableRoomName(participantCount);
+                // 戻り値がオブジェクトの場合とstring の場合を考慮
+                if (typeof roomResult === 'object' && roomResult.roomName) {
+                    roomNameInfo.roomName = roomResult.roomName;
+                } else if (typeof roomResult === 'string') {
+                    roomNameInfo.roomName = roomResult;
+                } else {
+                    roomNameInfo.roomName = 'オンライン';
+                }
+                writeLog('DEBUG', '会議室確保: ' + roomNameInfo.roomName + ' (総参加者: ' + participantCount + '名, 内訳: 入社者' + participants.length + '名+講師' + lecturerCount + '名)');
             } catch (e) {
-                roomName = '会議室確保失敗';
+                roomNameInfo.roomName = '会議室確保失敗';
                 writeLog('WARN', '会議室確保失敗: ' + e.message + ' (研修: ' + group.name + ')');
             }
         } else {
-            roomName = needsRoom ? '参加者なし' : 'オンライン';
+            roomNameInfo.roomName = needsRoom ? '参加者なし' : 'オンライン';
         }
         
         // 研修実施日時を計算
@@ -258,7 +418,7 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
                 (group.lecturer || ''),
             participantCount,                  // D列: 参加者数
             needsRoom ? '必要' : '不要',        // E列: 会議室要否
-            roomName,                          // F列: 会議室名
+            roomNameInfo.roomName,              // F列: 会議室名
             trainingDateTime,                  // G列: 研修実施日時
             ''                                 // H列: カレンダーID（初期作成時は空）
         ];
@@ -425,7 +585,7 @@ function updateMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
         
         var scheduleResult = scheduleMap[trainingName];
         if (scheduleResult) {
-            // E列（会議室名）を更新
+            // F列（会議室名）を更新
             var roomName = scheduleResult.roomName || '';
             if (roomName === '' && !scheduleResult.training.needsRoom) {
                 roomName = 'オンライン';
@@ -433,7 +593,7 @@ function updateMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
                 roomName = scheduleResult.error || '確保失敗';
             }
             
-            mappingSheet.getRange(row, 5).setValue(roomName); // E列: 会議室名
+            mappingSheet.getRange(row, 6).setValue(roomName); // F列: 会議室名
             
             // G列（研修実施日時）を更新（実際のスケジュール時間があれば）
             if (scheduleResult.eventTime && scheduleResult.eventTime.start) {
@@ -469,7 +629,7 @@ function updateMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
                 writeLog('WARN', 'カレンダーIDが空です: ' + trainingName + ' (scheduled: ' + scheduleResult.scheduled + ', error: ' + (scheduleResult.error || 'なし') + ')');
             }
             
-            writeLog('DEBUG', '更新完了: ' + trainingName + ' → 会議室: ' + roomName);
+            writeLog('DEBUG', '更新完了: ' + trainingName + ' → 会議室: ' + roomName + ' (F列に設定)');
         } else {
             writeLog('DEBUG', 'スケジュール結果なし: ' + trainingName);
         }
@@ -528,22 +688,17 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
         for (var j = 0; j < allNewHires.length; j++) {
             var hire = allNewHires[j];
             if (training.attendees.indexOf(hire.email) !== -1) {
-                participants.push(hire.name + '(' + hire.rank + '/' + hire.experience + ')');
+                participants.push(hire.name + '(' + hire.rank + '/' + hire.experience + '/' + hire.department + ')');
             }
         }
         var participantsList = participants.join('\n');
-        var participantCount = participants.length;
+        // 参加者数（入社者＋講師の合計）
+        var lecturerCount = (training.lecturerEmails && training.lecturerEmails.length > 0) ? training.lecturerEmails.length : (training.lecturer ? 1 : 0);
+        var participantCount = (participants ? participants.length : 0) + lecturerCount;
         
         // 会議室名を設定
-        var roomName = result.roomName || '';
-        if (roomName === 'オンライン' || (!training.needsRoom && roomName === '')) {
-            roomName = 'オンライン';
-        } else if (!result.scheduled) {
-            roomName = result.error || '確保失敗';
-        }
-        
-        // 研修実施日時を設定
-        var trainingDateTime = '';
+        var roomName = result.roomName || (training.needsRoom ? '会議室未確保' : 'オンライン');
+        var trainingDateTime = 'N/A';
         if (result.eventTime && result.eventTime.start) {
             trainingDateTime = Utilities.formatDate(result.eventTime.start, 'Asia/Tokyo', 'MM/dd(E) HH:mm') + 
                              '-' + Utilities.formatDate(result.eventTime.end, 'Asia/Tokyo', 'HH:mm');

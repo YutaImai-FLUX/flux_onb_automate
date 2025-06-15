@@ -130,8 +130,8 @@ function executeONBAutomation() {
       throw new Error('入社日エラー:\n' + errorDetails.join('\n'));
     }
     
-    // 1. 未処理の入社者リストを取得
-    var newHiresData = getNewHires();
+    // 1. 未処理の入社者リストを取得（入社日でフィルタリング）
+    var newHiresData = getNewHires(executionParams.hireDate);
     if (newHiresData.length === 0) {
       writeLog('INFO', '処理対象の入社者が見つかりませんでした');
       ui.alert('処理対象の入社者がいません。');
@@ -324,6 +324,7 @@ function debugMappingSheet() {
   try {
     writeLog('INFO', '=== マッピングシート作成デバッグ開始 ===');
     
+    // デバッグ用：入社日フィルタなし
     var newHires = getNewHires();
     if (newHires.length === 0) {
       SpreadsheetApp.getUi().alert('警告', '入社者データがありません。', SpreadsheetApp.getUi().ButtonSet.OK);
