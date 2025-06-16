@@ -156,6 +156,33 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
     var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.EXECUTION);
     var sheetName = 'マッピング結果_' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd_HH-mm');
     
+    // === 研修マスタから研修名→{day, seq} の辞書を構築 ===
+    var masterMap = {};
+    try {
+        var masterSheet = SpreadsheetApp.openById(SPREADSHEET_IDS.TRAINING_MASTER)
+                                       .getSheetByName(SHEET_NAMES.TRAINING_MASTER);
+        var masterLastRow = masterSheet.getLastRow();
+        if (masterLastRow > 4) {
+            // 研修データは5行目以降。I列(9)まで取得すればH=7, I=8を含む
+            var masterValues = masterSheet.getRange(5, 1, masterLastRow - 4, 9).getValues();
+            for (var mi = 0; mi < masterValues.length; mi++) {
+                var mRow = masterValues[mi];
+                var mName = mRow[2]; // C列: 研修名称
+                if (mName && mName.toString().trim() !== '') {
+                    masterMap[mName.trim()] = {
+                        day: mRow[7],  // H列: 実施日(営業日)
+                        seq: mRow[8]   // I列: 実施順
+                    };
+                }
+            }
+            writeLog('DEBUG', '研修マスタ読み込み完了: ' + Object.keys(masterMap).length + '件');
+        } else {
+            writeLog('WARN', '研修マスタにデータ行がありません');
+        }
+    } catch (e) {
+        writeLog('ERROR', '研修マスタ読み込み中にエラー: ' + e.message);
+    }
+    
     // 既存のマッピングシートがあれば削除
     var existingSheets = spreadsheet.getSheets();
     for (var i = 0; i < existingSheets.length; i++) {
@@ -206,15 +233,20 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
         var lecturerCount = (group.lecturerEmails && group.lecturerEmails.length > 0) ? group.lecturerEmails.length : (group.lecturer ? 1 : 0);
         var participantCount = (participants ? participants.length : 0) + lecturerCount;
         
+        // 研修マスタから実施日・実施順を取得（存在すれば優先）
+        var masterInfo = masterMap[group.name] || {};
+        var implementationDayVal = (masterInfo.day !== undefined && masterInfo.day !== '') ? masterInfo.day : (group.implementationDay || '');
+        var sequenceVal = (masterInfo.seq !== undefined && masterInfo.seq !== '') ? masterInfo.seq : (group.sequence || '');
+        
         var row = [
             group.name,
             participantsList,
             group.lecturerNames ? group.lecturerNames.join('\n') : '',
-            participants.length + '/' + (group.needsRoom ? group.attendees.length : 0),
+            participantCount,
             group.needsRoom ? '必要' : '不要',
             '', // 会議室名
-            group.implementationDay || '', // 実施日(営業日)
-            group.sequence || '', // 実施順
+            implementationDayVal, // 実施日(営業日)
+            sequenceVal, // 実施順
             '', // 研修実施日時
             '', // カレンダーID
             '待機中',
@@ -235,18 +267,18 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
         dataRange.setVerticalAlignment('top');
         
         // 列幅設定
-        mappingSheet.setColumnWidth(1, 250);  // 研修名
-        mappingSheet.setColumnWidth(2, 300);  // 対象者
-        mappingSheet.setColumnWidth(3, 200);  // 講師
-        mappingSheet.setColumnWidth(4, 80);   // 参加者数
-        mappingSheet.setColumnWidth(5, 100);  // 会議室要否
-        mappingSheet.setColumnWidth(6, 150);  // 会議室名
-        mappingSheet.setColumnWidth(7, 180);  // 実施日(営業日)
-        mappingSheet.setColumnWidth(8, 100);  // 実施順
-        mappingSheet.setColumnWidth(9, 120);  // 研修実施日時
+        mappingSheet.setColumnWidth(1, 400);  // 研修名
+        mappingSheet.setColumnWidth(2, 225);  // 対象者
+        mappingSheet.setColumnWidth(3, 90);  // 講師
+        mappingSheet.setColumnWidth(4, 90);   // 参加者数
+        mappingSheet.setColumnWidth(5, 90);  // 会議室要否
+        mappingSheet.setColumnWidth(6, 90);  // 会議室名
+        mappingSheet.setColumnWidth(7, 90);  // 実施日(営業日)
+        mappingSheet.setColumnWidth(8, 90);  // 実施順
+        mappingSheet.setColumnWidth(9, 150);  // 研修実施日時
         mappingSheet.setColumnWidth(10, 300); // カレンダーID
         mappingSheet.setColumnWidth(11, 120);  // 処理状況
-        mappingSheet.setColumnWidth(12, 300); // エラー詳細
+        mappingSheet.setColumnWidth(12, 500); // エラー詳細
         
         // 列の固定
         mappingSheet.setFrozenColumns(1);

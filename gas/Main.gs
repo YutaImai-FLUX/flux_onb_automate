@@ -8,7 +8,6 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('研修自動化')
-    .addItem('📋 実行ログを表示', 'showExecutionLogs')
     .addSeparator()
     .addItem('カレンダー招待を実行（従来版）', 'executeONBAutomation')
     .addSeparator()
@@ -269,10 +268,10 @@ function deleteAllCalendarEvents() {
 function deleteSpecificEvent() {
   var ui = SpreadsheetApp.getUi();
   
-  // 研修名を入力
+  // カレンダーIDを入力
   var response = ui.prompt(
-    '特定研修の削除',
-    '削除する研修名を入力してください:',
+    '特定イベントの削除',
+    '削除するカレンダーイベントIDを入力してください:',
     ui.ButtonSet.OK_CANCEL
   );
   
@@ -281,16 +280,16 @@ function deleteSpecificEvent() {
     return;
   }
   
-  var trainingName = response.getResponseText().trim();
-  if (!trainingName) {
-    ui.alert('エラー', '研修名が入力されていません。', ui.ButtonSet.OK);
+  var calendarId = response.getResponseText().trim();
+  if (!calendarId) {
+    ui.alert('エラー', 'カレンダーIDが入力されていません。', ui.ButtonSet.OK);
     return;
   }
   
   // 確認ダイアログを表示
   var confirmResponse = ui.alert(
     '確認', 
-    '研修「' + trainingName + '」のカレンダーイベントを削除します。\nこの操作は取り消せません。実行しますか？',
+    'カレンダーID「' + calendarId + '」のイベントを削除します。\nこの操作は取り消せません。実行しますか？',
     ui.ButtonSet.YES_NO
   );
   
@@ -300,20 +299,20 @@ function deleteSpecificEvent() {
   }
   
   try {
-    writeLog('INFO', '特定研修カレンダーイベント削除操作開始: 研修名=' + trainingName + ', 実行者=' + Session.getActiveUser().getEmail());
-    
-    var success = deleteSpecificTrainingEvent(trainingName);
+    writeLog('INFO', '特定イベント削除操作開始: calId=' + calendarId + ', 実行者=' + Session.getActiveUser().getEmail());
+
+    var success = deleteEventByCalendarId(calendarId);
     
     if (success) {
-      writeLog('INFO', '特定研修カレンダーイベント削除成功: ' + trainingName);
-      ui.alert('削除完了', '研修「' + trainingName + '」のカレンダーイベントを削除しました。', ui.ButtonSet.OK);
+      writeLog('INFO', '特定イベント削除成功: ' + calendarId);
+      ui.alert('削除完了', 'カレンダーID「' + calendarId + '」のイベントを削除しました。', ui.ButtonSet.OK);
     } else {
-      writeLog('WARN', '特定研修カレンダーイベント削除失敗: ' + trainingName);
-      ui.alert('削除失敗', '研修「' + trainingName + '」のカレンダーイベントの削除に失敗しました。\n研修名が正確か、またはカレンダーIDが設定されているかを確認してください。', ui.ButtonSet.OK);
+      writeLog('WARN', '特定イベント削除失敗: ' + calendarId);
+      ui.alert('削除失敗', 'カレンダーID「' + calendarId + '」のイベント削除に失敗しました。\nIDが正しいか確認してください。', ui.ButtonSet.OK);
     }
     
   } catch (e) {
-    writeLog('ERROR', '特定研修カレンダーイベント削除でエラー: ' + e.message + ' (研修名: ' + trainingName + ')');
+    writeLog('ERROR', '特定イベント削除でエラー: ' + e.message + ' (calId: ' + calendarId + ')');
     ui.alert('エラー', 'カレンダーイベントの削除中にエラーが発生しました:\n' + e.message, ui.ButtonSet.OK);
   }
 }
