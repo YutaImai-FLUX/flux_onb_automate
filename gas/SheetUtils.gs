@@ -608,13 +608,13 @@ function updateMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
                 roomName = scheduleResult.error || '確保失敗';
             }
             
-            mappingSheet.getRange(row, 6).setValue(roomName); // F列: 会議室名
+            mappingSheet.getRange(row, MAPPING_COLS.ROOM_NAME).setValue(roomName); // F列: 会議室名
             
             // G列（研修実施日時）を更新（実際のスケジュール時間があれば）
             if (scheduleResult.eventTime && scheduleResult.eventTime.start) {
                 var actualDateTime = Utilities.formatDate(scheduleResult.eventTime.start, 'Asia/Tokyo', 'MM/dd(E) HH:mm') + 
                                    '-' + Utilities.formatDate(scheduleResult.eventTime.end, 'Asia/Tokyo', 'HH:mm');
-                mappingSheet.getRange(row, 7).setValue(actualDateTime); // G列: 研修実施日時
+                mappingSheet.getRange(row, MAPPING_COLS.SCHEDULE).setValue(actualDateTime); // G列: 研修実施日時
                 writeLog('INFO', 'G列(研修実施日時)更新成功: ' + trainingName + ' → ' + actualDateTime);
             } else {
                 writeLog('WARN', 'G列(研修実施日時)更新スキップ: ' + trainingName + ' (eventTime: ' + 
@@ -635,7 +635,7 @@ function updateMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
                 }
                 
                 if (calendarIdCol > 0) {
-                    mappingSheet.getRange(row, calendarIdCol).setValue(scheduleResult.calendarEventId);
+                    mappingSheet.getRange(row, MAPPING_COLS.CAL_ID).setValue(scheduleResult.calendarEventId);
                     writeLog('INFO', 'カレンダーID更新成功: ' + trainingName + ' → ' + scheduleResult.calendarEventId + ' (列: ' + calendarIdCol + ')');
                 } else {
                     writeLog('ERROR', 'カレンダーID列が見つかりません: ' + trainingName + ' (ヘッダー: ' + headerRow.join(', ') + ')');
@@ -771,16 +771,14 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
         countRange.setVerticalAlignment('middle');
         
         // スケジュール状況列（K列）のスタイル設定
-        var statusRange = mappingSheet.getRange(2, 12, dataRows.length, 1);
+        var statusRange = mappingSheet.getRange(2, MAPPING_COLS.STATUS, dataRows.length, 1);
         for (var i = 0; i < dataRows.length; i++) {
-            var status = dataRows[i][11]; // スケジュール状況
-            var cellRange = mappingSheet.getRange(i + 2, 12);
+            var status = dataRows[i][MAPPING_COLS.STATUS]; // スケジュール状況
+            var cellRange = mappingSheet.getRange(i + 2, MAPPING_COLS.STATUS);
             if (status.indexOf('成功') !== -1) {
-                cellRange.setBackground('#d4edda');
-                cellRange.setFontColor('#155724');
+                cellRange.setBackground('#d4edda').setFontColor('#155724');
             } else {
-                cellRange.setBackground('#f8d7da');
-                cellRange.setFontColor('#721c24');
+                cellRange.setBackground('#f8d7da').setFontColor('#721c24');
             }
         }
     }
@@ -854,16 +852,16 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
 function updateMappingSheetRow(mappingSheet, rowIndex, updates) {
     try {
         if (updates.roomName !== undefined) {
-            mappingSheet.getRange(rowIndex, 6).setValue(updates.roomName); // F列: 会議室名
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.ROOM_NAME).setValue(updates.roomName); // F列: 会議室名
         }
         if (updates.schedule !== undefined) {
-            mappingSheet.getRange(rowIndex, 7).setValue(updates.schedule); // G列: 研修実施日時
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.SCHEDULE).setValue(updates.schedule); // G列: 研修実施日時
         }
         if (updates.calendarId !== undefined) {
-            mappingSheet.getRange(rowIndex, 8).setValue(updates.calendarId); // H列: カレンダーID
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.CAL_ID).setValue(updates.calendarId); // H列: カレンダーID
         }
         if (updates.status !== undefined) {
-            var statusCell = mappingSheet.getRange(rowIndex, 9); // I列: 処理状況
+            var statusCell = mappingSheet.getRange(rowIndex, MAPPING_COLS.STATUS); // I列: 処理状況
             statusCell.setValue(updates.status);
             
             // 処理状況に応じた背景色設定
@@ -876,7 +874,7 @@ function updateMappingSheetRow(mappingSheet, rowIndex, updates) {
             }
         }
         if (updates.errorReason !== undefined) {
-            mappingSheet.getRange(rowIndex, 10).setValue(updates.errorReason); // J列: エラー詳細
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.ERROR).setValue(updates.errorReason); // J列: エラー詳細
         }
         
         // 表示を強制的に更新
