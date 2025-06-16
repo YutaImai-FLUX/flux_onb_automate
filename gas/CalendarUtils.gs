@@ -1330,18 +1330,19 @@ function deleteCalendarEventsFromMappingSheet() {
  */
 function getMostRecentMappingSheet() {
     try {
-        var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.MAPPING);
+        // マッピングシートはEXECUTIONスプレッドシート内に作成されるため、EXECUTION IDを使用
+        var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.EXECUTION);
         var sheets = spreadsheet.getSheets();
         
         writeLog('DEBUG', 'スプレッドシート内のシート数: ' + sheets.length);
         
-        // マッピングシート名は通常「マッピング_YYYYMMDD」の形式
+        // マッピングシート名は通常「マッピング結果_YYYYMMDD」の形式
         var mappingSheets = [];
         
         for (var i = 0; i < sheets.length; i++) {
             var sheetName = sheets[i].getName();
             writeLog('DEBUG', 'シート名確認: ' + sheetName);
-            if (sheetName.indexOf('マッピング_') === 0) {
+            if (sheetName.indexOf('マッピング結果_') === 0) {
                 mappingSheets.push(sheets[i]);
                 writeLog('DEBUG', 'マッピングシートを発見: ' + sheetName);
             }
