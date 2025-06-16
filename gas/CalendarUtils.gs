@@ -261,7 +261,7 @@ var TimeSlotCalculator = (function() {
                 } else if (implementationDay === 2) {
                     baseHour = 16; baseMinute = 0;
                 } else {
-                    baseHour = 9; baseMinute = 0;
+                    baseHour = 10; baseMinute = 0; // 3営業日目以降は10:00開始に変更
                 }
                 
                 return new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), baseHour, baseMinute);
