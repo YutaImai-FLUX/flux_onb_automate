@@ -516,3 +516,102 @@ function テスト_カレンダー重複問題検証() {
   }
 }
 
+/**
+ * 全カレンダーイベントを削除するメニュー関数
+ */
+function deleteAllCalendarEvents() {
+  var ui = SpreadsheetApp.getUi();
+  
+  // 確認ダイアログを表示
+  var response = ui.alert(
+    '確認', 
+    '最新のマッピングシートに記録されているすべてのカレンダーイベントを削除します。\nこの操作は取り消せません。実行しますか？',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response !== ui.Button.YES) {
+    ui.alert('操作がキャンセルされました。');
+    return;
+  }
+  
+  try {
+    writeLog('INFO', '全カレンダーイベント削除操作開始: 実行者=' + Session.getActiveUser().getEmail());
+    
+    // リファクタリング版の関数を使用
+    var result = deleteCalendarEventsFromMappingSheet();
+    
+    var message = '削除完了:\n' +
+                  '・対象シート: ' + result.sheetName + '\n' +
+                  '・成功: ' + result.success + '件\n' +
+                  '・失敗: ' + result.failed + '件\n' +
+                  '・総数: ' + result.total + '件';
+    
+    if (result.errors.length > 0) {
+      message += '\n\nエラー詳細:\n' + result.errors.join('\n');
+    }
+    
+    writeLog('INFO', '全カレンダーイベント削除完了: ' + JSON.stringify(result));
+    ui.alert('削除完了', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    writeLog('ERROR', '全カレンダーイベント削除でエラー: ' + e.message);
+    ui.alert('エラー', 'カレンダーイベントの削除中にエラーが発生しました:\n' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * 特定研修のイベントを削除するメニュー関数
+ */
+function deleteSpecificEvent() {
+  var ui = SpreadsheetApp.getUi();
+  
+  // 研修名を入力
+  var response = ui.prompt(
+    '特定研修の削除',
+    '削除する研修名を入力してください:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    ui.alert('操作がキャンセルされました。');
+    return;
+  }
+  
+  var trainingName = response.getResponseText().trim();
+  if (!trainingName) {
+    ui.alert('エラー', '研修名が入力されていません。', ui.ButtonSet.OK);
+    return;
+  }
+  
+  // 確認ダイアログを表示
+  var confirmResponse = ui.alert(
+    '確認', 
+    '研修「' + trainingName + '」のカレンダーイベントを削除します。\nこの操作は取り消せません。実行しますか？',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (confirmResponse !== ui.Button.YES) {
+    ui.alert('操作がキャンセルされました。');
+    return;
+  }
+  
+  try {
+    writeLog('INFO', '特定研修カレンダーイベント削除操作開始: 研修名=' + trainingName + ', 実行者=' + Session.getActiveUser().getEmail());
+    
+    // リファクタリング版の関数を使用
+    var success = deleteSpecificTrainingEvent(trainingName);
+    
+    if (success) {
+      writeLog('INFO', '特定研修カレンダーイベント削除成功: ' + trainingName);
+      ui.alert('削除完了', '研修「' + trainingName + '」のカレンダーイベントを削除しました。', ui.ButtonSet.OK);
+    } else {
+      writeLog('WARN', '特定研修カレンダーイベント削除失敗: ' + trainingName);
+      ui.alert('削除失敗', '研修「' + trainingName + '」のカレンダーイベントの削除に失敗しました。\n研修名が正確か、またはカレンダーIDが設定されているかを確認してください。', ui.ButtonSet.OK);
+    }
+    
+  } catch (e) {
+    writeLog('ERROR', '特定研修カレンダーイベント削除でエラー: ' + e.message + ' (研修名: ' + trainingName + ')');
+    ui.alert('エラー', 'カレンダーイベントの削除中にエラーが発生しました:\n' + e.message, ui.ButtonSet.OK);
+  }
+}
+
