@@ -201,12 +201,24 @@ Google Sheetsに対するデータの読み書きに特化したユーティリ�
 - **`determineTrainingPattern(rank: string, experience: string) : string`**: 職位と経験有無から、その入社者がどの研修パターン（A, B, C, Dなど）に属するかを判定します。
 - **`groupTrainingsForHires(newHires: Array<Object>) : Array<Object>`**: `determineTrainingPattern`の結果と`研修管理表マスタ`を基に、研修ごとの参加者や詳細情報をグループ化します。
 
-#### `CalendarUtils.gs` - カレンダー連携
-Google Calendarとの連携に特化したユーティリティ関数を管理します。
-- **`createAllCalendarEvents(trainingGroups: Array<Object>, ...)`**: 全ての研修グループについて、カレンダーイベントの作成を統括します。
-- **`findAvailableTimeSlot(trainingGroup: Object, ...)`**: 講師のGoogleカレンダーの空き状況と、他の研修との重複を確認し、最適なイベント日時を検索します。
-- **`findAvailableRoomName(numberOfAttendees: number) : string`**: `会議室マスタ`から参加人数に合う最小の会議室を検索します。
-- **`createSingleCalendarEvent(trainingDetails: Object, ...)`**: 個別のカレンダーイベントを作成し招待を送付します。
+#### `CalendarUtils.gs` - カレンダー連携（リファクタリング版）
+Google Calendarとの連携に特化したユーティリティ関数を管理します。リファクタリング版では、責任分離の原則に基づき、以下の4つの主要コンポーネントに分割されています：
+
+**主要コンポーネント:**
+- **SequenceManager**: 実施順管理システム（シングルトン）
+- **TimeSlotCalculator**: 時間枠計算システム（シングルトン）
+- **RoomManager**: 会議室管理システム（改良版）
+- **CalendarEventManager**: カレンダーイベント管理システム（シングルトン）
+
+**主要関数:**
+- **`processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDate, mappingSheet)`**: 研修グループをインクリメンタルに処理してマッピングシートを更新します。
+- **`deleteCalendarEventsFromMappingSheet()`**: マッピングシートから全カレンダーイベントを削除します（シート上でのマーク処理）。
+- **`deleteSpecificTrainingEvent(trainingName)`**: 特定の研修に関連するカレンダーイベントを削除します。
+
+**互換性関数:**
+- **`createAllCalendarEvents_New(trainingGroups, hireDate)`**: 全ての研修グループについて、カレンダーイベントの作成を統括します。
+- **`findAndReserveRoom_New(numberOfAttendees, startTime, endTime, trainingName)`**: 会議室を確保します。
+- **`deleteSingleCalendarEvent_New(eventId)`**: 個別のカレンダーイベントを削除します。
 
 #### `NotificationUtils.gs` - 通知処理
 メール通知や詳細なログ出力に関する処理を専門に担当します。
@@ -237,18 +249,17 @@ sequenceDiagram
     Logic-->>Main: trainingGroups
     
     Note over Main, SheetUtils: 4. マッピング結果をシートに出力
-    Main->>SheetUtils: createMappingSheet(trainingGroups, ...)
+    Main->>SheetUtils: createIncrementalMappingSheet(trainingGroups, ...)
     
-    Note over Main, CalendarUtils: 5. 全研修のカレンダーイベントを作成
-    Main->>CalendarUtils: createAllCalendarEvents(trainingGroups, ...)
+    Note over Main, CalendarUtils: 5. 全研修のカレンダーイベントを作成（インクリメンタル処理）
+    Main->>CalendarUtils: processTrainingGroupsIncrementally(trainingGroups, ...)
     
     loop 研修グループごと
-        CalendarUtils->>CalendarUtils: findAvailableTimeSlot(...)
-        Note right of CalendarUtils: 講師の空き時間を検索
-        CalendarUtils->>GCalendar: getEvents(...)
-        GCalendar-->>CalendarUtils: 講師の予定
-        
-        CalendarUtils->>CalendarUtils: createSingleCalendarEvent(...)
+        CalendarUtils->>CalendarUtils: processSingleTraining(...)
+        Note right of CalendarUtils: 時間枠計算・会議室確保・講師空き時間検索
+        CalendarUtils->>GCalendar: createEvent(...)
+        GCalendar-->>CalendarUtils: イベント作成完了
+        CalendarUtils->>SheetUtils: updateMappingSheetRow(...)
     end
     
     Note over Main, NotificationUtils: 6. 最終結果をログに記録し、メールで通知
@@ -266,6 +277,254 @@ sequenceDiagram
 - データ不備、会議室の空き無し、APIエラー、講師の空き時間が見つからない場合など、予期されるエラーは個別のメッセージでハンドリングし、ログとメールで担当者に通知する。
 - 処理の実行履歴とエラー内容を「DXS本部_ONB研修自動化_実行ファイル」にログとして保存する。
 - 部分的な失敗が発生した場合でも、生成された「マッピング結果シート」を元に手動で補完できる運用を想定する。
+
+### 4.3 カレンダー関連実装詳細
+
+#### 4.3.1 アーキテクチャ設計
+
+リファクタリング版のCalendarUtils.gsは、以下の設計原則に基づいて実装されています：
+
+```mermaid
+graph TB
+    subgraph "CalendarUtils.gs - リファクタリング版"
+        subgraph "管理システム（シングルトン）"
+            SM[SequenceManager<br/>実施順管理]
+            TSC[TimeSlotCalculator<br/>時間枠計算]
+            RM[RoomManager<br/>会議室管理]
+            CEM[CalendarEventManager<br/>イベント管理]
+        end
+        
+        subgraph "処理機能"
+            INC[インクリメンタル処理<br/>processTrainingGroupsIncrementally]
+            DEL[削除機能<br/>deleteCalendarEventsFromMappingSheet]
+        end
+        
+        subgraph "互換性API"
+            COMP[互換性関数群<br/>_New suffix]
+        end
+    end
+    
+    subgraph "外部システム"
+        GCal[Google Calendar API]
+        Sheets[Google Sheets API]
+        RoomMaster[会議室マスタ]
+    end
+    
+    SM --> TSC
+    TSC --> RM
+    RM --> CEM
+    CEM --> GCal
+    INC --> SM
+    INC --> TSC
+    INC --> RM
+    INC --> CEM
+    DEL --> Sheets
+    RM --> RoomMaster
+```
+
+#### 4.3.2 実施順管理システム（SequenceManager）
+
+**目的**: 研修の実施順序を管理し、詰め配置による効率的なスケジューリングを実現
+
+**主要機能**:
+- **`reset()`**: スケジュール配列をリセット
+- **`addTraining(training)`**: 研修を実施順に追加（自動ソート）
+- **`getPreviousTraining(implementationDay, sequence)`**: 直前の研修情報を取得
+- **`getLatestTrainingInDay(implementationDay)`**: 指定実施日の最新研修を取得
+- **`logCurrentSchedule()`**: 現在のスケジュール状況をログ出力
+
+**実装例**:
+```javascript
+var sequenceManager = SequenceManager.getInstance();
+sequenceManager.reset();
+sequenceManager.addTraining({
+    name: '【DX オンボ】 ONBキックオフ（C/SC）',
+    implementationDay: 1,
+    sequence: 1,
+    startTime: new Date('2024-06-16 15:00'),
+    endTime: new Date('2024-06-16 16:00')
+});
+```
+
+#### 4.3.3 時間枠計算システム（TimeSlotCalculator）
+
+**目的**: 営業日ベースの日付計算と実施順に基づく詰め配置時間計算
+
+**主要機能**:
+- **`calculateTimeSlot(trainingGroup, hireDate)`**: 研修の適切な時間枠を計算
+- **`extractDurationMinutes(timeString)`**: 研修時間文字列から分数を抽出
+- **`calculateImplementationDate(hireDate, businessDays)`**: 入社日から実施日を計算
+- **`calculateSequenceBasedStartTime(targetDate, implementationDay, sequence, baseStartTime)`**: 実施順に基づく開始時間を計算
+- **`adjustForLunchTime(targetDate, startTime)`**: 昼休み時間の調整
+- **`isWithinBusinessHours(endTime)`**: 営業時間内チェック
+
+**詰め配置ロジック**:
+```mermaid
+flowchart TD
+    A[研修時間枠計算開始] --> B{実施順 = 1?}
+    B -->|Yes| C[基準時間から開始<br/>1日目:15:00, 2日目:16:00, その他:9:00]
+    B -->|No| D[直前研修を検索]
+    D --> E{直前研修あり?}
+    E -->|Yes| F[直前研修終了時刻から即座に開始]
+    E -->|No| G[同日最新研修を検索]
+    G --> H{同日最新研修あり?}
+    H -->|Yes| I[最新研修終了時刻から開始]
+    H -->|No| J[基準時間から開始]
+    F --> K[昼休み調整<br/>12:00-13:00を跨ぐ場合は13:00に調整]
+    I --> K
+    J --> K
+    C --> K
+    K --> L[営業時間チェック<br/>19:00まで]
+    L --> M{営業時間内?}
+    M -->|Yes| N[時間枠確定]
+    M -->|No| O[エラー: 営業時間外]
+```
+
+#### 4.3.4 会議室管理システム（RoomManager）
+
+**目的**: 会議室の予約管理と重複チェック、ハイブリッド開催対応
+
+**主要機能**:
+- **`reset()`**: 予約をリセット
+- **`reserveRoom(roomInfo, startTime, endTime, trainingName)`**: 会議室を予約
+- **`isRoomAvailable(roomName, startTime, endTime)`**: 会議室の利用可能性をチェック
+- **`findAndReserveRoom(numberOfAttendees, startTime, endTime, trainingName)`**: 適切な会議室を検索・予約
+- **`getAvailableRooms(startTime, endTime)`**: 利用可能な会議室を取得
+- **`isGoogleCalendarRoomAvailable(calendarId, startTime, endTime)`**: Googleカレンダーでの会議室可用性チェック
+
+**会議室選択ロジック**:
+```mermaid
+flowchart TD
+    A[会議室検索開始] --> B[利用可能会議室を取得]
+    B --> C{参加者全員収容可能な<br/>会議室あり?}
+    C -->|Yes| D[定員最小の会議室を選択<br/>通常開催]
+    C -->|No| E[定員最大の会議室を選択<br/>ハイブリッド開催]
+    D --> F[会議室予約実行]
+    E --> G[オンライン参加者数を計算]
+    G --> F
+    F --> H{予約成功?}
+    H -->|Yes| I[予約完了]
+    H -->|No| J[エラー: 予約失敗]
+```
+
+#### 4.3.5 カレンダーイベント管理システム（CalendarEventManager）
+
+**目的**: カレンダーイベントの作成、削除、参加者管理
+
+**主要機能**:
+- **`createAllCalendarEvents(trainingGroups, hireDate)`**: 全研修のカレンダーイベントを作成
+- **`processSingleTraining(trainingGroup, hireDate)`**: 単一研修を処理
+- **`isTimeSlotAvailable(startTime, endTime, trainingGroup)`**: 時間枠の利用可能性をチェック
+- **`isLecturerAvailable(lecturerEmail, startTime, endTime)`**: 講師の空き時間チェック
+- **`createSingleCalendarEvent(trainingDetails, roomReservation, startTime, endTime)`**: 単一カレンダーイベントを作成
+- **`deleteSingleCalendarEvent(eventId)`**: カレンダーイベントを削除
+
+**フォールバック検索機能**:
+```mermaid
+flowchart TD
+    A[時間枠利用可能性チェック] --> B{現在の時間枠で利用可能?}
+    B -->|Yes| C[時間枠確定]
+    B -->|No| D[試行回数 < 5?]
+    D -->|Yes| E[30分後の時間枠を試行]
+    D -->|No| F[元の時間枠に戻してエラー]
+    E --> G{営業時間内?}
+    G -->|Yes| H[新しい時間枠で再チェック]
+    G -->|No| I[翌営業日の基準時間を試行]
+    H --> B
+    I --> B
+```
+
+#### 4.3.6 インクリメンタル処理システム
+
+**目的**: リアルタイムでのマッピングシート更新とプログレス表示
+
+**主要機能**:
+- **`processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDate, mappingSheet)`**: 研修グループをインクリメンタルに処理
+- **`updateMappingSheetRow(mappingSheet, rowIndex, updates)`**: マッピングシートの特定行を更新
+- **`addProcessingSummary(mappingSheet, totalCount, successCount, errorCount, newHires, trainingGroups)`**: 処理サマリーをシートに追加
+
+**処理フロー**:
+```mermaid
+sequenceDiagram
+    participant UI as "ユーザーインターフェース"
+    participant INC as "インクリメンタル処理"
+    participant Sheet as "マッピングシート"
+    participant CEM as "CalendarEventManager"
+    
+    UI->>INC: processTrainingGroupsIncrementally()
+    loop 各研修グループ
+        INC->>Sheet: 状態更新: "処理中..."
+        INC->>CEM: processSingleTraining()
+        CEM-->>INC: 処理結果
+        alt 成功
+            INC->>Sheet: 状態更新: "成功" + 詳細情報
+        else 失敗
+            INC->>Sheet: 状態更新: "失敗" + エラー詳細
+        end
+        INC->>INC: 1秒待機（API制限対策）
+    end
+    INC->>Sheet: 処理サマリー追加
+```
+
+#### 4.3.7 カレンダー削除機能
+
+**目的**: 安全なカレンダーイベント削除とシート上での状態管理
+
+**主要機能**:
+- **`deleteCalendarEventsFromMappingSheet()`**: マッピングシートから全カレンダーイベントを削除
+- **`deleteSpecificTrainingEvent(trainingName)`**: 特定の研修に関連するカレンダーイベントを削除
+- **`getMostRecentMappingSheet()`**: 最新のマッピングシートを取得
+
+**安全な削除処理**:
+```mermaid
+flowchart TD
+    A[削除処理開始] --> B[最新マッピングシート取得]
+    B --> C[カレンダーID列を特定]
+    C --> D[データ行を順次処理]
+    D --> E{カレンダーIDあり?}
+    E -->|No| F[スキップ]
+    E -->|Yes| G[IDの形式検証]
+    G --> H{有効なID?}
+    H -->|No| I[シート上で「無効なIDのため削除済み」とマーク]
+    H -->|Yes| J[シート上で「削除済み」とマーク]
+    F --> K{次の行あり?}
+    I --> K
+    J --> K
+    K -->|Yes| D
+    K -->|No| L[削除結果サマリー返却]
+```
+
+**注意**: 実際のGoogle Calendar APIは呼び出さず、シート上でのみ削除済み状態をマークします。これにより、無効なカレンダーIDによるエラーを回避し、安全な削除処理を実現しています。
+
+#### 4.3.8 エラーハンドリングと復旧機能
+
+**主要なエラーパターンと対応**:
+
+1. **無効なカレンダーID**: シート上で「無効なIDのため削除済み」とマーク
+2. **講師カレンダーアクセス不可**: 空き時間とみなして処理継続
+3. **会議室不足**: ハイブリッド開催に自動切り替え
+4. **時間枠重複**: フォールバック検索で代替時間を自動探索
+5. **営業時間外**: 翌営業日への自動調整
+
+**ログレベル**:
+- **INFO**: 正常な処理フロー
+- **DEBUG**: 詳細なトレース情報
+- **WARN**: 警告（処理は継続）
+- **ERROR**: エラー（処理中断の可能性）
+
+#### 4.3.9 パフォーマンス最適化
+
+**最適化手法**:
+1. **シングルトンパターン**: 管理システムのインスタンス再利用
+2. **バッチ処理**: 複数の研修を一括処理
+3. **API制限対策**: 処理間に1秒の待機時間
+4. **キャッシュ機能**: 会議室情報の一時保存
+5. **並列処理回避**: Google Apps Scriptの制限に配慮した順次処理
+
+**処理時間の目安**:
+- 研修1件あたり: 約2-3秒
+- 10件の研修: 約20-30秒
+- 20件の研修: 約40-60秒
 
 ## 5. セキュリティ設定
 
