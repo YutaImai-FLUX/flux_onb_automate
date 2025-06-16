@@ -186,7 +186,7 @@ function executeONBAutomation() {
     if (trainingGroups.length > 0) {
       var mappingSheet = createIncrementalMappingSheet(trainingGroups, newHiresData, periodStart, periodEnd);
       
-      // 4. カレンダーイベントを作成（インクリメンタル処理）
+      // 4. カレンダーイベントを作成（インクリメンタル処理、リファクタリング版）
       writeLog('INFO', 'インクリメンタルカレンダーイベント作成を開始');
       writeLog('INFO', '入社日基準: ' + executionParams.hireDate);
       processTrainingGroupsIncrementally(trainingGroups, newHiresData, executionParams.hireDate, mappingSheet);
