@@ -19,4 +19,20 @@ var SHEET_NAMES = {
 };
 
 // 通知メールの送信先
-var NOTIFICATION_EMAIL = Session.getActiveUser().getEmail(); 
+var NOTIFICATION_EMAIL = Session.getActiveUser().getEmail();
+
+// マッピング結果シート列番号（1-indexed）
+var MAPPING_COLS = {
+  NAME: 1,
+  PARTICIPANTS: 2,
+  LECTURER: 3,
+  COUNT: 4,
+  NEEDS_ROOM: 5,
+  ROOM_NAME: 6,
+  IMPLEMENT_DAY: 7,
+  SEQUENCE: 8,
+  SCHEDULE: 9,
+  CAL_ID: 10,
+  STATUS: 11,
+  ERROR: 12
+}; 

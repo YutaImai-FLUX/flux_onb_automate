@@ -1149,16 +1149,16 @@ function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDat
 function updateMappingSheetRow(mappingSheet, rowIndex, updates) {
     try {
         if (updates.roomName !== undefined) {
-            mappingSheet.getRange(rowIndex, 6).setValue(updates.roomName); // F列: 会議室名
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.ROOM_NAME).setValue(updates.roomName); // F列: 会議室名
         }
         if (updates.schedule !== undefined) {
-            mappingSheet.getRange(rowIndex, 7).setValue(updates.schedule); // G列: 研修実施日時
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.SCHEDULE).setValue(updates.schedule); // G列: 研修実施日時
         }
         if (updates.calendarId !== undefined) {
-            mappingSheet.getRange(rowIndex, 8).setValue(updates.calendarId); // H列: カレンダーID
+            mappingSheet.getRange(rowIndex, MAPPING_COLS.CAL_ID).setValue(updates.calendarId); // H列: カレンダーID
         }
         if (updates.status !== undefined) {
-            var statusCell = mappingSheet.getRange(rowIndex, 9); // I列: 処理状況
+            var statusCell = mappingSheet.getRange(rowIndex, MAPPING_COLS.STATUS);
             statusCell.setValue(updates.status);
             
             // 処理状況に応じた背景色設定
@@ -1173,7 +1173,7 @@ function updateMappingSheetRow(mappingSheet, rowIndex, updates) {
             }
         }
         if (updates.errorReason !== undefined) {
-            var errorCell = mappingSheet.getRange(rowIndex, 10); // J列: エラー詳細
+            var errorCell = mappingSheet.getRange(rowIndex, MAPPING_COLS.ERROR);
             errorCell.setValue(updates.errorReason);
         }
         
@@ -1340,9 +1340,9 @@ function deleteCalendarEventsFromMappingSheet(confirmDeletion) {
         
         // カレンダーIDが格納されている列を特定
         var lastRow = mappingSheet.getLastRow();
-        var calendarIdCol = 8; // H列 (カレンダーID)
-        var eventNameCol = 1;  // A列 (研修名)
-        var resultStatCol = 9; // I列 (処理状況)
+        var calendarIdCol = MAPPING_COLS.CAL_ID;
+        var eventNameCol = MAPPING_COLS.NAME;
+        var resultStatCol = MAPPING_COLS.STATUS;
         
         if (lastRow <= 1) {
             throw new Error('マッピングシートにデータがありません');
@@ -1571,7 +1571,7 @@ function deleteSpecificTrainingEvent(trainingName) {
         
         for (var i = 0; i < data.length; i++) {
             var currentTrainingName = data[i][0]; // A列：研修名
-            var calendarId = data[i][7];          // H列：カレンダーID
+            var calendarId = data[i][MAPPING_COLS.CAL_ID -1]; // zero index
             
             if (currentTrainingName === trainingName && calendarId && 
                 calendarId !== '削除済み' && calendarId !== '無効なIDのため削除済み' && 
@@ -1595,8 +1595,8 @@ function deleteSpecificTrainingEvent(trainingName) {
                     if (!event) {
                         writeLog('WARN', '特定研修のカレンダーイベントが見つかりません（既に削除済みの可能性）: ' + calendarId);
                         // 見つからない場合も成功として扱う（既に削除済み）
-                        mappingSheet.getRange(i + 2, 8).setValue('削除済み（既に存在しない）'); // H列：カレンダーID
-                        mappingSheet.getRange(i + 2, 9).setValue('削除済み'); // I列：処理状況
+                        mappingSheet.getRange(i + 2, MAPPING_COLS.CAL_ID).setValue('削除済み（既に存在しない）');
+                        mappingSheet.getRange(i + 2, MAPPING_COLS.STATUS).setValue('削除済み');
                         success = true;
                         break;
                     }
@@ -1613,8 +1613,8 @@ function deleteSpecificTrainingEvent(trainingName) {
                     event.deleteEvent();
                     
                     // シート上で削除済みとマーク
-                    mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // H列：カレンダーID
-                    mappingSheet.getRange(i + 2, 9).setValue('削除済み'); // I列：処理状況
+                    mappingSheet.getRange(i + 2, MAPPING_COLS.CAL_ID).setValue('削除済み');
+                    mappingSheet.getRange(i + 2, MAPPING_COLS.STATUS).setValue('削除済み');
                     
                     writeLog('INFO', '特定研修のカレンダーイベント削除成功: "' + trainingName + '" (ID: ' + calendarId + ')');
                     success = true;
@@ -1625,11 +1625,11 @@ function deleteSpecificTrainingEvent(trainingName) {
                     // エラー時の処理
                     try {
                         if (e.message.indexOf('無効な引数') !== -1 || e.message.indexOf('Invalid argument') !== -1) {
-                            mappingSheet.getRange(i + 2, 8).setValue('無効なIDのため削除済み');
-                            mappingSheet.getRange(i + 2, 9).setValue('無効ID: ' + e.message);
+                            mappingSheet.getRange(i + 2, MAPPING_COLS.CAL_ID).setValue('無効なIDのため削除済み');
+                            mappingSheet.getRange(i + 2, MAPPING_COLS.STATUS).setValue('無効ID: ' + e.message);
                         } else {
-                            mappingSheet.getRange(i + 2, 8).setValue('エラーのため削除済み');
-                            mappingSheet.getRange(i + 2, 9).setValue('エラー: ' + e.message);
+                            mappingSheet.getRange(i + 2, MAPPING_COLS.CAL_ID).setValue('エラーのため削除済み');
+                            mappingSheet.getRange(i + 2, MAPPING_COLS.STATUS).setValue('エラー: ' + e.message);
                         }
                     } catch (err) {
                         writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);

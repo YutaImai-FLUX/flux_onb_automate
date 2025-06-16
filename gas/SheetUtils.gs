@@ -169,7 +169,7 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
     writeLog('INFO', '新しいシート作成: ' + sheetName);
     
     // ヘッダー行を作成
-    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'カレンダーID', '処理状況', 'エラー詳細'];
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '実施日(営業日)', '実施順', '研修実施日時', 'カレンダーID', '処理状況', 'エラー詳細'];
     
     // ヘッダーを設定
     mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -207,17 +207,18 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
         var participantCount = (participants ? participants.length : 0) + lecturerCount;
         
         var row = [
-            group.name,                                                    // A列: 研修名
-            participantsList,                                              // B列: 対象者
-            (group.lecturerNames && group.lecturerNames.length > 0) ?      // C列: 講師
-                group.lecturerNames.join('\n') : (group.lecturer || ''),
-            participantCount,                                              // D列: 参加者数
-            group.needsRoom ? '必要' : '不要',                              // E列: 会議室要否
-            '待機中...',                                                   // F列: 会議室名（初期値）
-            '待機中...',                                                   // G列: 研修実施日時（初期値）
-            '',                                                           // H列: カレンダーID（初期値）
-            '待機中',                                                      // I列: 処理状況
-            ''                                                           // J列: エラー詳細（初期値）
+            group.name,
+            participantsList,
+            group.lecturerNames ? group.lecturerNames.join('\n') : '',
+            participants.length + '/' + (group.needsRoom ? group.attendees.length : 0),
+            group.needsRoom ? '必要' : '不要',
+            '', // 会議室名
+            group.implementationDay || '', // 実施日(営業日)
+            group.sequence || '', // 実施順
+            '', // 研修実施日時
+            '', // カレンダーID
+            '待機中',
+            ''  // エラー詳細
         ];
         
         dataRows.push(row);
@@ -240,10 +241,12 @@ function createIncrementalMappingSheet(trainingGroups, allNewHires, periodStart,
         mappingSheet.setColumnWidth(4, 80);   // 参加者数
         mappingSheet.setColumnWidth(5, 100);  // 会議室要否
         mappingSheet.setColumnWidth(6, 150);  // 会議室名
-        mappingSheet.setColumnWidth(7, 180);  // 研修実施日時
-        mappingSheet.setColumnWidth(8, 100);  // カレンダーID
-        mappingSheet.setColumnWidth(9, 120);  // 処理状況
-        mappingSheet.setColumnWidth(10, 300); // エラー詳細
+        mappingSheet.setColumnWidth(7, 180);  // 実施日(営業日)
+        mappingSheet.setColumnWidth(8, 100);  // 実施順
+        mappingSheet.setColumnWidth(9, 120);  // 研修実施日時
+        mappingSheet.setColumnWidth(10, 300); // カレンダーID
+        mappingSheet.setColumnWidth(11, 120);  // 処理状況
+        mappingSheet.setColumnWidth(12, 300); // エラー詳細
         
         // 列の固定
         mappingSheet.setFrozenColumns(1);
@@ -281,7 +284,7 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
     writeLog('INFO', '新しいシート作成: ' + sheetName);
     
     // ヘッダー行を作成（講師列をB列の次に移動）
-    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'カレンダーID'];
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '実施日(営業日)', '実施順', '研修実施日時', 'カレンダーID'];
     
     // ヘッダーを設定
     mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -427,8 +430,10 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
             participantCount,                  // D列: 参加者数
             needsRoom ? '必要' : '不要',        // E列: 会議室要否
             roomNameInfo.roomName,              // F列: 会議室名
-            trainingDateTime,                  // G列: 研修実施日時
-            ''                                 // H列: カレンダーID（初期作成時は空）
+            group.implementationDay || '',       // G列: 実施日(営業日)
+            group.sequence || '',                // H列: 実施順
+            trainingDateTime,                  // I列: 研修実施日時
+            ''                                 // J列: カレンダーID（初期作成時は空）
         ];
         
         writeLog('DEBUG', '行データ作成完了: ' + group.name + ' (列数: ' + row.length + ')');
@@ -478,8 +483,10 @@ function createMappingSheet(trainingGroups, allNewHires, periodStart, periodEnd)
     mappingSheet.setColumnWidth(4, 80);   // D列: 参加者数 - 数値用の狭い幅
     mappingSheet.setColumnWidth(5, 100);  // E列: 会議室要否 - "必要/不要"用
     mappingSheet.setColumnWidth(6, 150);  // F列: 会議室名 - 会議室名称用
-    mappingSheet.setColumnWidth(7, 180);  // G列: 研修実施日時 - 日時フォーマット用
-    mappingSheet.setColumnWidth(8, 100);  // H列: カレンダーID - システム用（最小限）
+    mappingSheet.setColumnWidth(7, 180);  // G列: 実施日(営業日) - 日付フォーマット用
+    mappingSheet.setColumnWidth(8, 100);  // H列: 実施順 - 数値用の狭い幅
+    mappingSheet.setColumnWidth(9, 120);  // I列: 研修実施日時 - 日時フォーマット用
+    mappingSheet.setColumnWidth(10, 100);  // J列: カレンダーID - システム用（最小限）
     
     // 列の固定（研修名列を固定してスクロールしやすくする）
     mappingSheet.setFrozenColumns(1);
@@ -672,7 +679,7 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
     writeLog('INFO', '新しいシート作成: ' + sheetName);
     
     // ヘッダー行を作成（講師列をB列の次に移動）
-    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '研修実施日時', 'スケジュール状況', 'カレンダーID'];
+    var headers = ['研修名', '対象者', '講師', '参加者数', '会議室要否', '会議室名', '実施日(営業日)', '実施順', '研修実施日時', 'カレンダーID', '処理状況', 'エラー詳細'];
     
     // ヘッダーを設定
     mappingSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -727,9 +734,12 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
             participantCount,                       // D列: 参加者数
             training.needsRoom ? '必要' : '不要',    // E列: 会議室要否
             roomName,                               // F列: 会議室名
-            trainingDateTime,                       // G列: 研修実施日時
-            scheduleStatus,                         // H列: スケジュール状況
-            result.calendarEventId || ''            // I列: カレンダーID
+            training.implementationDay || '',         // G列: 実施日(営業日)
+            training.sequence || '',                 // H列: 実施順
+            trainingDateTime,                       // I列: 研修実施日時
+            result.calendarEventId || '',            // J列: カレンダーID
+            scheduleStatus,                         // K列: 処理状況
+            result.error || ''                     // L列: エラー詳細
         ];
         
         dataRows.push(row);
@@ -760,11 +770,11 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
         countRange.setHorizontalAlignment('center');
         countRange.setVerticalAlignment('middle');
         
-        // スケジュール状況列（H列）のスタイル設定
-        var statusRange = mappingSheet.getRange(2, 8, dataRows.length, 1);
+        // スケジュール状況列（K列）のスタイル設定
+        var statusRange = mappingSheet.getRange(2, 12, dataRows.length, 1);
         for (var i = 0; i < dataRows.length; i++) {
-            var status = dataRows[i][7]; // スケジュール状況
-            var cellRange = mappingSheet.getRange(i + 2, 8);
+            var status = dataRows[i][11]; // スケジュール状況
+            var cellRange = mappingSheet.getRange(i + 2, 12);
             if (status.indexOf('成功') !== -1) {
                 cellRange.setBackground('#d4edda');
                 cellRange.setFontColor('#155724');
@@ -775,16 +785,19 @@ function createMappingSheetWithScheduleResults(scheduleResults, allNewHires, per
         }
     }
     
-    // 列幅の最適化設定（スケジュール結果版 - 9列構成、講師列をC列に移動後）
+    // 列幅の最適化設定（スケジュール結果版 - 12列構成、講師列をC列に移動後）
     mappingSheet.setColumnWidth(1, 250);  // A列: 研修名 - 研修名称に適した幅
     mappingSheet.setColumnWidth(2, 300);  // B列: 対象者 - 複数参加者名に対応
     mappingSheet.setColumnWidth(3, 200);  // C列: 講師 - 複数講師名に対応
     mappingSheet.setColumnWidth(4, 80);   // D列: 参加者数 - 数値用の狭い幅
     mappingSheet.setColumnWidth(5, 100);  // E列: 会議室要否 - "必要/不要"用
     mappingSheet.setColumnWidth(6, 150);  // F列: 会議室名 - 会議室名称用
-    mappingSheet.setColumnWidth(7, 180);  // G列: 研修実施日時 - 日時フォーマット用
-    mappingSheet.setColumnWidth(8, 120);  // H列: スケジュール状況 - 成功/失敗状況
-    mappingSheet.setColumnWidth(9, 100);  // I列: カレンダーID - システム用（最小限）
+    mappingSheet.setColumnWidth(7, 180);  // G列: 実施日(営業日) - 日付フォーマット用
+    mappingSheet.setColumnWidth(8, 100);  // H列: 実施順 - 数値用の狭い幅
+    mappingSheet.setColumnWidth(9, 120);  // I列: 研修実施日時 - 日時フォーマット用
+    mappingSheet.setColumnWidth(10, 100);  // J列: カレンダーID - システム用（最小限）
+    mappingSheet.setColumnWidth(11, 120);  // K列: 処理状況 - 成功/失敗状況
+    mappingSheet.setColumnWidth(12, 300);  // L列: エラー詳細 - エラー理由
     
     // 列の固定（研修名列を固定してスクロールしやすくする）
     mappingSheet.setFrozenColumns(1);
