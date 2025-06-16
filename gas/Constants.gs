@@ -8,6 +8,7 @@ var SPREADSHEET_IDS = {
   NEW_HIRES:   '1BOfOUnIHotCLatJYKxDNNfndtptlC8NjoU7NoO2niAQ', // DXS本部_入社者連携シート
   TRAINING_MASTER: '1YNmiNiqSe7ctkHkW3qMOK7K13iodMixKs5WuDrMXsO8', // DXS本部_ONB研修マスタ
   ROOM_MASTER:   '16xML66Ywi8Q5oFf8e5NEHdJrQPwkjUcJdswwXPxtnCQ', // FLUX_六本木オフィス会議室マスタ
+  MAPPING:      '1o3JlRORxDgE6Hv2NyohB2uMRRlr1iSsOA8czmylUGxE', // EXECUTIONと同じID（マッピングシートはEXECUTIONスプレッドシート内に作成される）
 };
 
 // シート名
