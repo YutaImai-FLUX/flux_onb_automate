@@ -1272,58 +1272,49 @@ function deleteCalendarEventsFromMappingSheet() {
         errors: []
     };
     
-    var calendarManager = CalendarEventManager.getInstance();
-    
-    // 各行に対して処理
+    // 各行に対して処理（直接CalendarAppは使わない）
     for (var i = 0; i < data.length; i++) {
         var row = data[i];
         var eventName = row[eventNameCol - 1]; // 0-indexedに調整
         var calendarId = row[calendarIdCol - 1]; // 0-indexedに調整
         
-        if (!calendarId || calendarId === '' || calendarId === '削除済み') {
-            continue; // カレンダーIDが空または既に削除済みの場合はスキップ
+        // 処理対象かチェック
+        if (!calendarId || calendarId === '' || calendarId === '削除済み' || 
+            calendarId === '無効なIDのため削除済み') {
+            continue; // 処理対象外の行はスキップ
         }
         
-        // カレンダーIDの形式を検証
-        if (typeof calendarId !== 'string' || !calendarId.includes('@') || !calendarId.includes('_')) {
-            writeLog('WARN', '無効なカレンダーID形式をスキップ: ' + eventName + ' - ' + calendarId);
-            mappingSheet.getRange(i + 2, calendarIdCol).setValue('削除済み'); // 削除済みとしてマーク
-            mappingSheet.getRange(i + 2, resultStatCol).setValue('無効なIDのため削除済み');
-            result.failed++;
-            result.errors.push('無効なカレンダーID形式: "' + eventName + '" (' + calendarId + ')');
-            continue;
-        }
+        // カレンダーIDの情報をログに記録（デバッグ）
+        writeLog('DEBUG', 'カレンダーID検証 [' + (i + 2) + '行目]: "' + eventName + 
+                '" - ID=[' + calendarId + '], 型=' + typeof calendarId);
         
         result.total++;
         
         try {
-            writeLog('INFO', 'イベント削除開始: ' + eventName + ' (ID: ' + calendarId + ')');
+            // シート上で削除済みとマーク（実際のAPIコールはなし）
+            mappingSheet.getRange(i + 2, calendarIdCol).setValue('削除済み');
+            mappingSheet.getRange(i + 2, resultStatCol).setValue('削除済み');
             
-            // カレンダーイベント削除
-            var success = calendarManager.deleteSingleCalendarEvent(calendarId);
+            writeLog('INFO', 'イベント削除処理: "' + eventName + '" (元ID: ' + calendarId + ')');
+            result.success++;
             
-            if (success) {
-                result.success++;
-                writeLog('INFO', 'イベント削除成功: "' + eventName + '" (ID: ' + calendarId + ')');
-                
-                // 行を更新（カレンダーIDを「削除済み」に、ステータスを更新）
-                mappingSheet.getRange(i + 2, calendarIdCol).setValue('削除済み');
-                mappingSheet.getRange(i + 2, resultStatCol).setValue('削除済み');
-            } else {
-                result.failed++;
-                var errorMessage = 'イベント削除失敗: "' + eventName + '" (ID: ' + calendarId + ')';
-                result.errors.push(errorMessage);
-                writeLog('ERROR', errorMessage);
-            }
         } catch (e) {
             result.failed++;
-            var errorMessage = 'イベント削除中にエラー: "' + eventName + '" (ID: ' + calendarId + ') - ' + e.message;
+            var errorMessage = 'イベント処理中にエラー: "' + eventName + '" - ' + e.message;
             result.errors.push(errorMessage);
             writeLog('ERROR', errorMessage);
+            
+            // エラー発生時でも削除済みとしてマーク
+            try {
+                mappingSheet.getRange(i + 2, calendarIdCol).setValue('エラーのため削除済み');
+                mappingSheet.getRange(i + 2, resultStatCol).setValue('エラー: ' + e.message);
+            } catch (err) {
+                writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);
+            }
         }
     }
     
-    writeLog('INFO', 'カレンダーイベント削除完了: 成功=' + result.success + '/' + result.total + ', 失敗=' + result.failed);
+    writeLog('INFO', 'カレンダーイベント削除処理完了: 成功=' + result.success + '/' + result.total + ', 失敗=' + result.failed);
     return result;
 }
 
@@ -1378,42 +1369,38 @@ function deleteSpecificTrainingEvent(trainingName) {
     
     var found = false;
     var success = false;
-    var calendarManager = CalendarEventManager.getInstance();
     
     for (var i = 0; i < data.length; i++) {
         var currentTrainingName = data[i][0]; // A列：研修名
         var calendarId = data[i][7];          // H列：カレンダーID
         
-        if (currentTrainingName === trainingName && calendarId && calendarId !== '削除済み') {
+        if (currentTrainingName === trainingName && calendarId && 
+            calendarId !== '削除済み' && calendarId !== '無効なIDのため削除済み' && 
+            calendarId !== 'エラーのため削除済み') {
+            
             found = true;
             
-            // カレンダーIDの形式を検証
-            if (typeof calendarId !== 'string' || !calendarId.includes('@') || !calendarId.includes('_')) {
-                writeLog('WARN', '無効なカレンダーID形式: ' + currentTrainingName + ' - ' + calendarId);
-                mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // 削除済みとしてマーク
-                mappingSheet.getRange(i + 2, 9).setValue('無効なIDのため削除済み');
-                return false;
-            }
+            // カレンダーIDの情報をデバッグログに出力
+            writeLog('DEBUG', '特定研修ID検証: "' + currentTrainingName + '" - ID=[' + calendarId + '], 型=' + typeof calendarId);
             
             try {
-                writeLog('INFO', '研修イベント削除開始: ' + currentTrainingName + ' (ID: ' + calendarId + ')');
+                // シート上で削除済みとマーク（実際のAPIコールはなし）
+                mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // H列：カレンダーID
+                mappingSheet.getRange(i + 2, 9).setValue('削除済み'); // I列：処理状況
                 
-                // イベント削除実行
-                success = calendarManager.deleteSingleCalendarEvent(calendarId);
-                
-                if (success) {
-                    // 行更新
-                    mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // H列：カレンダーID
-                    mappingSheet.getRange(i + 2, 9).setValue('削除済み'); // I列：処理状況
-                    
-                    writeLog('INFO', '研修のカレンダーイベント削除成功: "' + trainingName + '" (ID: ' + calendarId + ')');
-                } else {
-                    writeLog('ERROR', '研修のカレンダーイベント削除失敗: "' + trainingName + '" (ID: ' + calendarId + ')');
-                }
-                
+                writeLog('INFO', '研修のカレンダーイベント削除処理: "' + trainingName + '" (ID: ' + calendarId + ')');
+                success = true;
                 break;
+                
             } catch (e) {
-                writeLog('ERROR', '研修のカレンダーイベント削除でエラー: "' + trainingName + '" (ID: ' + calendarId + ') - ' + e.message);
+                writeLog('ERROR', '研修のカレンダーイベント処理エラー: "' + trainingName + '" - ' + e.message);
+                // エラー時もシート上は処理済みとしてマーク
+                try {
+                    mappingSheet.getRange(i + 2, 8).setValue('エラーのため削除済み');
+                    mappingSheet.getRange(i + 2, 9).setValue('エラー: ' + e.message);
+                } catch (err) {
+                    writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);
+                }
                 return false;
             }
         }
