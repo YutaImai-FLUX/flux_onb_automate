@@ -100,6 +100,12 @@ function getNewHires(targetHireDate) {
     }
   }
   writeLog('DEBUG', '対象入社者数: ' + newHires.length);
+  
+  // フォールバック: 指定入社日の対象者が0名の場合、日付フィルタを外して全対象を再取得
+  if (newHires.length === 0 && targetHireDate) {
+    writeLog('WARN', '指定入社日(' + Utilities.formatDate(targetHireDate, 'Asia/Tokyo', 'yyyy/MM/dd') + ')の対象入社者が0名でした。日付フィルタを外して再検索します。');
+    return getNewHires(null); // fallbackUsedは呼び出し側で判定できるようにログで通知
+  }
   return newHires;
 }
 

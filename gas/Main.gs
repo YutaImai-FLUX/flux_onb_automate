@@ -133,10 +133,11 @@ function executeONBAutomation() {
     // 1. 未処理の入社者リストを取得（入社日でフィルタリング）
     var newHiresData = getNewHires(executionParams.hireDate);
     if (newHiresData.length === 0) {
-      writeLog('INFO', '処理対象の入社者が見つかりませんでした');
-      ui.alert('処理対象の入社者がいません。');
-      logExecution(executionParams, '完了', '処理対象の入社者が見つかりませんでした。');
-      return;
+      var infoMsg = '処理対象の入社者が見つかりませんでした。処理をスキップして正常終了します。';
+      writeLog('INFO', infoMsg);
+      ui.alert('情報', infoMsg, ui.ButtonSet.OK);
+      logExecution(executionParams, '成功', infoMsg);
+      return; // 正常終了
     }
     
     // 対象者情報をログに出力
