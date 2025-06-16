@@ -2,7 +2,7 @@
 // カレンダー関連ユーティリティ（リファクタリング版）
 // =========================================
 
-writeLog('INFO', 'CalendarUtils_Refactored.gs の読み込みを開始しました');
+writeLog('INFO', 'CalendarUtils.gs の読み込みを開始しました');
 
 // =========================================
 // 実施順管理システム
@@ -127,7 +127,7 @@ var SequenceManager = (function() {
     };
 })();
 
-writeLog('INFO', 'CalendarUtils_Refactored.gs - SequenceManager を読み込みました');
+writeLog('INFO', 'CalendarUtils.gs - SequenceManager を読み込みました');
 
 // =========================================
 // 時間枠計算システム
@@ -352,7 +352,7 @@ var TimeSlotCalculator = (function() {
     };
 })();
 
-writeLog('INFO', 'CalendarUtils_Refactored.gs - TimeSlotCalculator を読み込みました');
+writeLog('INFO', 'CalendarUtils.gs - TimeSlotCalculator を読み込みました');
 
 // =========================================
 // 会議室管理システム（改良版）
@@ -584,7 +584,7 @@ var RoomManager = (function() {
     };
 })();
 
-writeLog('INFO', 'CalendarUtils_Refactored.gs - RoomManager を読み込みました');
+writeLog('INFO', 'CalendarUtils.gs - RoomManager を読み込みました');
 
 // =========================================
 // カレンダーイベント管理システム
@@ -973,7 +973,7 @@ var CalendarEventManager = (function() {
     };
 })();
 
-writeLog('INFO', 'CalendarUtils_Refactored.gs - CalendarEventManager を読み込みました');
+writeLog('INFO', 'CalendarUtils.gs - CalendarEventManager を読み込みました');
 
 // =========================================
 // インクリメンタル更新処理
@@ -1228,7 +1228,7 @@ var RoomReservationManager_New = (function() {
     };
 })();
 
-writeLog('INFO', 'CalendarUtils_Refactored.gs 完全読み込み完了');
+writeLog('INFO', 'CalendarUtils.gs 完全読み込み完了');
 
 // =========================================
 // カレンダーイベント削除機能
@@ -1241,81 +1241,87 @@ writeLog('INFO', 'CalendarUtils_Refactored.gs 完全読み込み完了');
 function deleteCalendarEventsFromMappingSheet() {
     writeLog('INFO', 'マッピングシートからカレンダーイベント削除を開始');
     
-    // 最新のマッピングシートを取得
-    var mappingSheet = getMostRecentMappingSheet();
-    if (!mappingSheet) {
-        throw new Error('マッピングシートが見つかりませんでした');
-    }
-    
-    writeLog('INFO', 'マッピングシートを取得しました: ' + mappingSheet.getName());
-    
-    // カレンダーIDが格納されている列を特定
-    var lastRow = mappingSheet.getLastRow();
-    var calendarIdCol = 8; // H列 (カレンダーID)
-    var eventNameCol = 1;  // A列 (研修名)
-    var resultStatCol = 9; // I列 (処理状況)
-    
-    if (lastRow <= 1) {
-        throw new Error('マッピングシートにデータがありません');
-    }
-    
-    // ヘッダー行を除いてデータ範囲を取得
-    var dataRange = mappingSheet.getRange(2, 1, lastRow - 1, calendarIdCol + 1);
-    var data = dataRange.getValues();
-    
-    // 結果を格納する変数
-    var result = {
-        sheetName: mappingSheet.getName(),
-        total: 0,
-        success: 0,
-        failed: 0,
-        errors: []
-    };
-    
-    // 各行に対して処理（直接CalendarAppは使わない）
-    for (var i = 0; i < data.length; i++) {
-        var row = data[i];
-        var eventName = row[eventNameCol - 1]; // 0-indexedに調整
-        var calendarId = row[calendarIdCol - 1]; // 0-indexedに調整
-        
-        // 処理対象かチェック
-        if (!calendarId || calendarId === '' || calendarId === '削除済み' || 
-            calendarId === '無効なIDのため削除済み') {
-            continue; // 処理対象外の行はスキップ
+    try {
+        // 最新のマッピングシートを取得
+        var mappingSheet = getMostRecentMappingSheet();
+        if (!mappingSheet) {
+            throw new Error('マッピングシートが見つかりませんでした');
         }
         
-        // カレンダーIDの情報をログに記録（デバッグ）
-        writeLog('DEBUG', 'カレンダーID検証 [' + (i + 2) + '行目]: "' + eventName + 
-                '" - ID=[' + calendarId + '], 型=' + typeof calendarId);
+        writeLog('INFO', 'マッピングシートを取得しました: ' + mappingSheet.getName());
         
-        result.total++;
+        // カレンダーIDが格納されている列を特定
+        var lastRow = mappingSheet.getLastRow();
+        var calendarIdCol = 8; // H列 (カレンダーID)
+        var eventNameCol = 1;  // A列 (研修名)
+        var resultStatCol = 9; // I列 (処理状況)
         
-        try {
-            // シート上で削除済みとマーク（実際のAPIコールはなし）
-            mappingSheet.getRange(i + 2, calendarIdCol).setValue('削除済み');
-            mappingSheet.getRange(i + 2, resultStatCol).setValue('削除済み');
+        if (lastRow <= 1) {
+            throw new Error('マッピングシートにデータがありません');
+        }
+        
+        // ヘッダー行を除いてデータ範囲を取得
+        var dataRange = mappingSheet.getRange(2, 1, lastRow - 1, calendarIdCol + 1);
+        var data = dataRange.getValues();
+        
+        // 結果を格納する変数
+        var result = {
+            sheetName: mappingSheet.getName(),
+            total: 0,
+            success: 0,
+            failed: 0,
+            errors: []
+        };
+        
+        // 各行に対して処理（シート上でのマークのみ）
+        for (var i = 0; i < data.length; i++) {
+            var row = data[i];
+            var eventName = row[eventNameCol - 1]; // 0-indexedに調整
+            var calendarId = row[calendarIdCol - 1]; // 0-indexedに調整
             
-            writeLog('INFO', 'イベント削除処理: "' + eventName + '" (元ID: ' + calendarId + ')');
-            result.success++;
+            // 処理対象かチェック
+            if (!calendarId || calendarId === '' || calendarId === '削除済み' || 
+                calendarId === '無効なIDのため削除済み' || calendarId === 'エラーのため削除済み') {
+                continue; // 処理対象外の行はスキップ
+            }
             
-        } catch (e) {
-            result.failed++;
-            var errorMessage = 'イベント処理中にエラー: "' + eventName + '" - ' + e.message;
-            result.errors.push(errorMessage);
-            writeLog('ERROR', errorMessage);
+            // カレンダーIDの情報をログに記録（デバッグ）
+            writeLog('DEBUG', 'カレンダーID検証 [' + (i + 2) + '行目]: "' + eventName + 
+                    '" - ID=[' + calendarId + '], 型=' + typeof calendarId);
             
-            // エラー発生時でも削除済みとしてマーク
+            result.total++;
+            
             try {
-                mappingSheet.getRange(i + 2, calendarIdCol).setValue('エラーのため削除済み');
-                mappingSheet.getRange(i + 2, resultStatCol).setValue('エラー: ' + e.message);
-            } catch (err) {
-                writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);
+                // シート上で削除済みとマーク（実際のAPIコールはなし）
+                mappingSheet.getRange(i + 2, calendarIdCol).setValue('削除済み');
+                mappingSheet.getRange(i + 2, resultStatCol).setValue('削除済み');
+                
+                writeLog('INFO', 'イベント削除処理: "' + eventName + '" (元ID: ' + calendarId + ')');
+                result.success++;
+                
+            } catch (e) {
+                result.failed++;
+                var errorMessage = 'イベント処理中にエラー: "' + eventName + '" - ' + e.message;
+                result.errors.push(errorMessage);
+                writeLog('ERROR', errorMessage);
+                
+                // エラー発生時でも削除済みとしてマーク
+                try {
+                    mappingSheet.getRange(i + 2, calendarIdCol).setValue('エラーのため削除済み');
+                    mappingSheet.getRange(i + 2, resultStatCol).setValue('エラー: ' + e.message);
+                } catch (err) {
+                    writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);
+                }
             }
         }
+        
+        writeLog('INFO', 'カレンダーイベント削除処理完了: 成功=' + result.success + '/' + result.total + ', 失敗=' + result.failed);
+        return result;
+        
+    } catch (e) {
+        writeLog('ERROR', 'deleteCalendarEventsFromMappingSheet でエラー: ' + e.message);
+        throw e;
     }
-    
-    writeLog('INFO', 'カレンダーイベント削除処理完了: 成功=' + result.success + '/' + result.total + ', 失敗=' + result.failed);
-    return result;
 }
 
 /**
@@ -1323,29 +1329,42 @@ function deleteCalendarEventsFromMappingSheet() {
  * @returns {Object|null} シートオブジェクトまたはnull
  */
 function getMostRecentMappingSheet() {
-    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.MAPPING);
-    var sheets = spreadsheet.getSheets();
-    
-    // マッピングシート名は通常「マッピング_YYYYMMDD」の形式
-    var mappingSheets = [];
-    
-    for (var i = 0; i < sheets.length; i++) {
-        var sheetName = sheets[i].getName();
-        if (sheetName.indexOf('マッピング_') === 0) {
-            mappingSheets.push(sheets[i]);
+    try {
+        var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_IDS.MAPPING);
+        var sheets = spreadsheet.getSheets();
+        
+        writeLog('DEBUG', 'スプレッドシート内のシート数: ' + sheets.length);
+        
+        // マッピングシート名は通常「マッピング_YYYYMMDD」の形式
+        var mappingSheets = [];
+        
+        for (var i = 0; i < sheets.length; i++) {
+            var sheetName = sheets[i].getName();
+            writeLog('DEBUG', 'シート名確認: ' + sheetName);
+            if (sheetName.indexOf('マッピング_') === 0) {
+                mappingSheets.push(sheets[i]);
+                writeLog('DEBUG', 'マッピングシートを発見: ' + sheetName);
+            }
         }
+        
+        if (mappingSheets.length === 0) {
+            writeLog('WARN', 'マッピングシートが見つかりませんでした');
+            return null;
+        }
+        
+        // 最新のシートを取得（名前でソート）
+        mappingSheets.sort(function(a, b) {
+            return b.getName().localeCompare(a.getName());
+        });
+        
+        var latestSheet = mappingSheets[0];
+        writeLog('INFO', '最新のマッピングシートを選択: ' + latestSheet.getName());
+        return latestSheet;
+        
+    } catch (e) {
+        writeLog('ERROR', 'getMostRecentMappingSheet でエラー: ' + e.message);
+        throw new Error('マッピングシートの取得に失敗しました: ' + e.message);
     }
-    
-    if (mappingSheets.length === 0) {
-        return null;
-    }
-    
-    // 最新のシートを取得（名前でソート）
-    mappingSheets.sort(function(a, b) {
-        return b.getName().localeCompare(a.getName());
-    });
-    
-    return mappingSheets[0];
 }
 
 /**
@@ -1356,60 +1375,66 @@ function getMostRecentMappingSheet() {
 function deleteSpecificTrainingEvent(trainingName) {
     writeLog('INFO', '特定研修のカレンダーイベント削除を開始: "' + trainingName + '"');
     
-    // マッピングシートを取得
-    var mappingSheet = getMostRecentMappingSheet();
-    if (!mappingSheet) {
-        throw new Error('マッピングシートが見つかりませんでした');
-    }
-    
-    // ヘッダー行を除いて全データを取得
-    var lastRow = mappingSheet.getLastRow();
-    var dataRange = mappingSheet.getRange(2, 1, lastRow - 1, 9); // A列（研修名）からI列（処理状況）まで
-    var data = dataRange.getValues();
-    
-    var found = false;
-    var success = false;
-    
-    for (var i = 0; i < data.length; i++) {
-        var currentTrainingName = data[i][0]; // A列：研修名
-        var calendarId = data[i][7];          // H列：カレンダーID
+    try {
+        // マッピングシートを取得
+        var mappingSheet = getMostRecentMappingSheet();
+        if (!mappingSheet) {
+            throw new Error('マッピングシートが見つかりませんでした');
+        }
         
-        if (currentTrainingName === trainingName && calendarId && 
-            calendarId !== '削除済み' && calendarId !== '無効なIDのため削除済み' && 
-            calendarId !== 'エラーのため削除済み') {
+        // ヘッダー行を除いて全データを取得
+        var lastRow = mappingSheet.getLastRow();
+        var dataRange = mappingSheet.getRange(2, 1, lastRow - 1, 9); // A列（研修名）からI列（処理状況）まで
+        var data = dataRange.getValues();
+        
+        var found = false;
+        var success = false;
+        
+        for (var i = 0; i < data.length; i++) {
+            var currentTrainingName = data[i][0]; // A列：研修名
+            var calendarId = data[i][7];          // H列：カレンダーID
             
-            found = true;
-            
-            // カレンダーIDの情報をデバッグログに出力
-            writeLog('DEBUG', '特定研修ID検証: "' + currentTrainingName + '" - ID=[' + calendarId + '], 型=' + typeof calendarId);
-            
-            try {
-                // シート上で削除済みとマーク（実際のAPIコールはなし）
-                mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // H列：カレンダーID
-                mappingSheet.getRange(i + 2, 9).setValue('削除済み'); // I列：処理状況
+            if (currentTrainingName === trainingName && calendarId && 
+                calendarId !== '削除済み' && calendarId !== '無効なIDのため削除済み' && 
+                calendarId !== 'エラーのため削除済み') {
                 
-                writeLog('INFO', '研修のカレンダーイベント削除処理: "' + trainingName + '" (ID: ' + calendarId + ')');
-                success = true;
-                break;
+                found = true;
                 
-            } catch (e) {
-                writeLog('ERROR', '研修のカレンダーイベント処理エラー: "' + trainingName + '" - ' + e.message);
-                // エラー時もシート上は処理済みとしてマーク
+                // カレンダーIDの情報をデバッグログに出力
+                writeLog('DEBUG', '特定研修ID検証: "' + currentTrainingName + '" - ID=[' + calendarId + '], 型=' + typeof calendarId);
+                
                 try {
-                    mappingSheet.getRange(i + 2, 8).setValue('エラーのため削除済み');
-                    mappingSheet.getRange(i + 2, 9).setValue('エラー: ' + e.message);
-                } catch (err) {
-                    writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);
+                    // シート上で削除済みとマーク（実際のAPIコールはなし）
+                    mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // H列：カレンダーID
+                    mappingSheet.getRange(i + 2, 9).setValue('削除済み'); // I列：処理状況
+                    
+                    writeLog('INFO', '研修のカレンダーイベント削除処理: "' + trainingName + '" (ID: ' + calendarId + ')');
+                    success = true;
+                    break;
+                    
+                } catch (e) {
+                    writeLog('ERROR', '研修のカレンダーイベント処理エラー: "' + trainingName + '" - ' + e.message);
+                    // エラー時もシート上は処理済みとしてマーク
+                    try {
+                        mappingSheet.getRange(i + 2, 8).setValue('エラーのため削除済み');
+                        mappingSheet.getRange(i + 2, 9).setValue('エラー: ' + e.message);
+                    } catch (err) {
+                        writeLog('ERROR', 'シート更新でさらにエラー: ' + err.message);
+                    }
+                    return false;
                 }
-                return false;
             }
         }
+        
+        if (!found) {
+            writeLog('WARN', '指定された研修が見つからないか、既に削除されています: "' + trainingName + '"');
+            return false;
+        }
+        
+        return success;
+        
+    } catch (e) {
+        writeLog('ERROR', 'deleteSpecificTrainingEvent でエラー: ' + e.message);
+        throw e;
     }
-    
-    if (!found) {
-        writeLog('WARN', '指定された研修が見つからないか、既に削除されています: "' + trainingName + '"');
-        return false;
-    }
-    
-    return success;
 } 
