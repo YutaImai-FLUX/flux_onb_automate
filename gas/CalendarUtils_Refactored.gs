@@ -925,7 +925,25 @@ var CalendarEventManager = (function() {
              * @returns {boolean} 削除成功かどうか
              */
             deleteSingleCalendarEvent: function(eventId) {
+                // IDの形式チェックと前処理
                 try {
+                    if (!eventId) {
+                        writeLog('WARN', 'イベントIDが空です');
+                        return false;
+                    }
+                    
+                    // 基本的な形式検証
+                    if (typeof eventId !== 'string') {
+                        writeLog('WARN', '無効なイベントID（文字列でない）: ' + eventId);
+                        return false;
+                    }
+                    
+                    // イベントIDの形式確認（フォーマット：<calendarId>_<eventUnique>）
+                    if (!eventId.includes('@') || !eventId.includes('_')) {
+                        writeLog('WARN', 'イベントIDのフォーマットが正しくありません: ' + eventId);
+                        return false;
+                    }
+                    
                     var event = CalendarApp.getEventById(eventId);
                     if (!event) {
                         writeLog('WARN', 'イベントが見つかりません: ' + eventId);
@@ -1266,9 +1284,21 @@ function deleteCalendarEventsFromMappingSheet() {
             continue; // カレンダーIDが空または既に削除済みの場合はスキップ
         }
         
+        // カレンダーIDの形式を検証
+        if (typeof calendarId !== 'string' || !calendarId.includes('@') || !calendarId.includes('_')) {
+            writeLog('WARN', '無効なカレンダーID形式をスキップ: ' + eventName + ' - ' + calendarId);
+            mappingSheet.getRange(i + 2, calendarIdCol).setValue('削除済み'); // 削除済みとしてマーク
+            mappingSheet.getRange(i + 2, resultStatCol).setValue('無効なIDのため削除済み');
+            result.failed++;
+            result.errors.push('無効なカレンダーID形式: "' + eventName + '" (' + calendarId + ')');
+            continue;
+        }
+        
         result.total++;
         
         try {
+            writeLog('INFO', 'イベント削除開始: ' + eventName + ' (ID: ' + calendarId + ')');
+            
             // カレンダーイベント削除
             var success = calendarManager.deleteSingleCalendarEvent(calendarId);
             
@@ -1357,7 +1387,17 @@ function deleteSpecificTrainingEvent(trainingName) {
         if (currentTrainingName === trainingName && calendarId && calendarId !== '削除済み') {
             found = true;
             
+            // カレンダーIDの形式を検証
+            if (typeof calendarId !== 'string' || !calendarId.includes('@') || !calendarId.includes('_')) {
+                writeLog('WARN', '無効なカレンダーID形式: ' + currentTrainingName + ' - ' + calendarId);
+                mappingSheet.getRange(i + 2, 8).setValue('削除済み'); // 削除済みとしてマーク
+                mappingSheet.getRange(i + 2, 9).setValue('無効なIDのため削除済み');
+                return false;
+            }
+            
             try {
+                writeLog('INFO', '研修イベント削除開始: ' + currentTrainingName + ' (ID: ' + calendarId + ')');
+                
                 // イベント削除実行
                 success = calendarManager.deleteSingleCalendarEvent(calendarId);
                 
