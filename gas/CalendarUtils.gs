@@ -98,6 +98,34 @@ var SequenceManager = (function() {
             },
             
             /**
+             * 指定した実施日・実施順の最新研修を取得（同じ実施順の研修がある場合用）
+             * @param {number} implementationDay - 実施日
+             * @param {number} sequence - 実施順
+             * @returns {Object|null} 最新の研修情報
+             */
+            getLatestTrainingInSequence: function(implementationDay, sequence) {
+                var latestTraining = null;
+                
+                // 同じ実施日・実施順の研修を全て取得
+                var sameSequenceTrainings = [];
+                for (var i = 0; i < scheduledTrainings.length; i++) {
+                    var training = scheduledTrainings[i];
+                    if (training.implementationDay === implementationDay && training.sequence === sequence) {
+                        sameSequenceTrainings.push(training);
+                    }
+                }
+                
+                // 最後に追加された（配列の最後の）研修を取得
+                if (sameSequenceTrainings.length > 0) {
+                    latestTraining = sameSequenceTrainings[sameSequenceTrainings.length - 1];
+                }
+                
+                writeLog('DEBUG', '実施日' + implementationDay + '実施順' + sequence + 'の最新研修: ' + 
+                         (latestTraining ? latestTraining.name + '(同実施順研修数: ' + sameSequenceTrainings.length + ')' : 'なし'));
+                return latestTraining;
+            },
+            
+            /**
              * 現在のスケジュール状況をログ出力
              */
             logCurrentSchedule: function() {
@@ -252,10 +280,20 @@ var TimeSlotCalculator = (function() {
                 
                 var sequenceManager = SequenceManager.getInstance();
                 
-                // 実施順1番の場合は基準時間から開始
+                // 実施順1番の場合は基準時間から開始（ただし、同じ実施順の研修がある場合は調整）
                 if (sequence === 1) {
-                    writeLog('DEBUG', '実施順1番のため基準時間から開始: ' + Utilities.formatDate(baseStartTime, 'Asia/Tokyo', 'HH:mm'));
-                    return baseStartTime;
+                    // 同じ実施日・実施順の既存研修をチェック
+                    var sameSequenceTraining = sequenceManager.getLatestTrainingInSequence(implementationDay, sequence);
+                    if (sameSequenceTraining && sameSequenceTraining.endTime) {
+                        var startTime = new Date(sameSequenceTraining.endTime.getTime());
+                        startTime = this.adjustForLunchTime(targetDate, startTime);
+                        writeLog('DEBUG', '実施順' + sequence + ': 同実施順の既存研修終了後から開始: ' + 
+                                 Utilities.formatDate(startTime, 'Asia/Tokyo', 'HH:mm'));
+                        return startTime;
+                    } else {
+                        writeLog('DEBUG', '実施順1番のため基準時間から開始: ' + Utilities.formatDate(baseStartTime, 'Asia/Tokyo', 'HH:mm'));
+                        return baseStartTime;
+                    }
                 }
 
                 // 直前の実施順の研修を探す
@@ -272,7 +310,17 @@ var TimeSlotCalculator = (function() {
                              Utilities.formatDate(startTime, 'Asia/Tokyo', 'HH:mm'));
                     return startTime;
                 } else {
-                    // 直前の実施順がない場合、同実施日の最新研修の後から開始
+                    // 直前の実施順がない場合、同じ実施順の既存研修をチェック
+                    var sameSequenceTraining = sequenceManager.getLatestTrainingInSequence(implementationDay, sequence);
+                    if (sameSequenceTraining && sameSequenceTraining.endTime) {
+                        var startTime = new Date(sameSequenceTraining.endTime.getTime());
+                        startTime = this.adjustForLunchTime(targetDate, startTime);
+                        writeLog('DEBUG', '実施順' + sequence + ': 同実施順の既存研修終了後から開始: ' + 
+                                 Utilities.formatDate(startTime, 'Asia/Tokyo', 'HH:mm'));
+                        return startTime;
+                    }
+                    
+                    // 同実施日の最新研修の後から開始
                     var latestTraining = sequenceManager.getLatestTrainingInDay(implementationDay);
                     
                     if (latestTraining && latestTraining.endTime) {
@@ -610,6 +658,8 @@ var CalendarEventManager = (function() {
                 // 管理システムをリセット
                 var sequenceManager = SequenceManager.getInstance();
                 var roomManager = RoomManager.getInstance();
+                var calendarManager = CalendarEventManager.getInstance();
+                
                 sequenceManager.reset();
                 roomManager.reset();
                 
@@ -625,13 +675,16 @@ var CalendarEventManager = (function() {
                     return seqA - seqB;
                 });
                 
+                writeLog('INFO', '研修グループをソートしました（実施日・実施順）');
+                
                 var results = [];
                 
                 for (var i = 0; i < trainingGroups.length; i++) {
                     var group = trainingGroups[i];
                     
                     try {
-                        writeLog('INFO', '研修処理開始 (' + (i + 1) + '/' + trainingGroups.length + '): ' + group.name);
+                        writeLog('INFO', '研修処理開始 (' + (i + 1) + '/' + trainingGroups.length + '): ' + group.name + 
+                                 ' (実施日: ' + (group.implementationDay || 'なし') + ', 実施順: ' + (group.sequence || 'なし') + ')');
                         
                         var result = this.processSingleTraining(group, hireDate);
                         results.push(result);
@@ -989,7 +1042,27 @@ writeLog('INFO', 'CalendarUtils.gs - CalendarEventManager を読み込みまし�
 function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDate, mappingSheet) {
     writeLog('INFO', 'インクリメンタル処理開始: ' + trainingGroups.length + '件の研修を処理');
     
+    // 管理システムをリセット
+    var sequenceManager = SequenceManager.getInstance();
+    var roomManager = RoomManager.getInstance();
     var calendarManager = CalendarEventManager.getInstance();
+    
+    sequenceManager.reset();
+    roomManager.reset();
+    
+    // 研修グループを実施日・実施順でソート
+    trainingGroups.sort(function(a, b) {
+        var dayA = a.implementationDay || 999;
+        var dayB = b.implementationDay || 999;
+        if (dayA !== dayB) {
+            return dayA - dayB;
+        }
+        var seqA = a.sequence || 999;
+        var seqB = b.sequence || 999;
+        return seqA - seqB;
+    });
+    
+    writeLog('INFO', '研修グループをソートしました（実施日・実施順）');
     
     var successCount = 0;
     var errorCount = 0;
@@ -998,7 +1071,8 @@ function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDat
         var group = trainingGroups[i];
         var rowIndex = i + 2; // スプレッドシートの行番号（ヘッダー行の次から）
         
-        writeLog('INFO', '処理中 (' + (i + 1) + '/' + trainingGroups.length + '): ' + group.name);
+        writeLog('INFO', '処理中 (' + (i + 1) + '/' + trainingGroups.length + '): ' + group.name + 
+                 ' (実施日: ' + (group.implementationDay || 'なし') + ', 実施順: ' + (group.sequence || 'なし') + ')');
         
         try {
             // 処理状況を「処理中」に更新
@@ -1021,6 +1095,11 @@ function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDat
                     schedule: scheduleStr,
                     calendarId: group.calendarEventId || ''
                 });
+                
+                // 成功した研修をSequenceManagerに追加
+                group.startTime = result.eventTime.start;
+                group.endTime = result.eventTime.end;
+                sequenceManager.addTraining(group);
                 
                 successCount++;
                 writeLog('INFO', '研修処理成功: ' + group.name + ' (ID: ' + group.calendarEventId + ')');
@@ -1051,6 +1130,9 @@ function processTrainingGroupsIncrementally(trainingGroups, allNewHires, hireDat
             Utilities.sleep(1000); // 1秒待機
         }
     }
+    
+    // 最終的なスケジュール状況をログ出力
+    sequenceManager.logCurrentSchedule();
     
     // 最終サマリーをシートに追加（拡張検証付き）
     addProcessingSummary(mappingSheet, trainingGroups.length, successCount, errorCount, allNewHires, trainingGroups);
